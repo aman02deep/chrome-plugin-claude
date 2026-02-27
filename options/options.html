@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Session Manager — Options</title>
+    <link rel="stylesheet" href="options.css" />
+</head>
+
+<body>
+
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <span class="logo-icon">⚡</span>
+            <span>Claude Session<br>Manager</span>
+        </div>
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-tab="tab-accounts">👥 Accounts</button>
+            <button class="nav-item" data-tab="tab-context">📋 Context</button>
+            <button class="nav-item" data-tab="tab-selectors">🔧 DOM Selectors</button>
+            <button class="nav-item" data-tab="tab-security">🔐 Security</button>
+            <button class="nav-item" data-tab="tab-log">📊 Switch Log</button>
+            <button class="nav-item" data-tab="tab-data">💾 Data</button>
+        </nav>
+    </aside>
+
+    <main class="main">
+
+        <!-- ── Accounts tab ──────────────────────────────── -->
+        <section id="tab-accounts" class="tab active">
+            <div class="tab-header">
+                <h1 class="tab-title">Accounts</h1>
+                <button class="btn btn-primary" id="btn-add-account">+ Add Account</button>
+            </div>
+
+            <div id="accounts-locked" class="locked-notice hidden">
+                🔒 Extension is locked. Open the popup and unlock first.
+            </div>
+
+            <div id="accounts-table-wrap">
+                <table class="data-table" id="accounts-table">
+                    <thead>
+                        <tr>
+                            <th>Color</th>
+                            <th>Label</th>
+                            <th>Email</th>
+                            <th>Last Used</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="accounts-tbody">
+                    </tbody>
+                </table>
+                <div id="accounts-empty" class="empty-state hidden">
+                    No accounts yet. Add your first account above.
+                </div>
+            </div>
+
+            <!-- Add / Edit form (inline) -->
+            <div id="account-form-wrap" class="card hidden">
+                <h2 class="card-title" id="account-form-title">Add Account</h2>
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label>Label *</label>
+                        <input type="text" id="acc-label" placeholder="Personal, Work, Backup…" maxlength="40" />
+                    </div>
+                    <div class="form-field">
+                        <label>Email (stored encrypted)</label>
+                        <input type="email" id="acc-email" placeholder="you@example.com" />
+                    </div>
+                    <div class="form-field">
+                        <label>Password (stored encrypted)</label>
+                        <input type="password" id="acc-password" placeholder="Leave blank to keep existing" />
+                    </div>
+                    <div class="form-field">
+                        <label>Color</label>
+                        <div class="color-wrap">
+                            <input type="color" id="acc-color" value="#4F46E5" />
+                            <span class="hint">Shown in the floating widget pill</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="acc-form-error" class="error-msg hidden"></div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" id="btn-save-acc">Save</button>
+                    <button class="btn btn-outline" id="btn-cancel-acc">Cancel</button>
+                    <button class="btn btn-danger hidden" id="btn-delete-acc">Delete Account</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Context tab ──────────────────────────────── -->
+        <section id="tab-context" class="tab hidden">
+            <div class="tab-header">
+                <h1 class="tab-title">Context History</h1>
+                <button class="btn btn-outline btn-danger-outline" id="btn-clear-ctx-history">🗑️ Clear All</button>
+            </div>
+
+            <!-- History list -->
+            <div id="ctx-history-empty" class="empty-state hidden">
+                No contexts saved yet. Use "Save Context" or "Switch + Save Context" from the floating widget on
+                Claude.ai.
+            </div>
+            <div id="ctx-history-list"></div>
+
+            <!-- Settings card -->
+            <div class="card" style="margin-top:28px">
+                <h2 class="card-title" style="margin-bottom:18px">⚙️ Context Settings</h2>
+                <div class="form-field">
+                    <label>Context mode</label>
+                    <select id="ctx-mode">
+                        <option value="structured">Structured (default — last N messages verbatim + earlier compressed)
+                        </option>
+                        <option value="full">Full transcript</option>
+                        <option value="manual">Manual (opens editor before switch)</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label>Messages kept verbatim (structured mode)</label>
+                    <input type="number" id="ctx-last-n" min="2" max="30" style="width:80px" />
+                    <p class="field-hint">Earlier messages are compressed to one-line bullets.</p>
+                </div>
+                <div class="form-field">
+                    <label>Handoff prompt template</label>
+                    <p class="field-hint">Use <code>{title}</code>, <code>{context}</code>, <code>{recent}</code>,
+                        <code>{nextStep}</code>. Leave blank for default.
+                    </p>
+                    <textarea id="ctx-template" rows="14"
+                        placeholder="Leave blank to use the built-in template…"></textarea>
+                </div>
+                <button class="btn btn-primary" id="btn-save-context-settings">Save Context Settings</button>
+                <button class="btn btn-outline" id="btn-reset-template" style="margin-left:8px">Reset to Default
+                    Template</button>
+                <div id="ctx-saved" class="success-msg hidden">✅ Saved</div>
+            </div>
+        </section>
+
+        <!-- ── Selectors tab ────────────────────────────── -->
+        <section id="tab-selectors" class="tab hidden">
+            <div class="tab-header">
+                <h1 class="tab-title">DOM Selectors</h1>
+            </div>
+            <div class="card">
+                <p class="section-desc">
+                    If claude.ai updates its frontend and context extraction breaks, update these selectors here — no
+                    extension reinstall needed.
+                    Use browser DevTools to find the right CSS selectors.
+                </p>
+
+                <div class="form-field">
+                    <label>Message container selector</label>
+                    <input type="text" id="sel-message-container" />
+                    <p class="field-hint">Matches all message bubbles (user + assistant)</p>
+                </div>
+                <div class="form-field">
+                    <label>Human message selector</label>
+                    <input type="text" id="sel-human-message" />
+                    <p class="field-hint">Distinguishes user messages from Claude's within the container</p>
+                </div>
+                <div class="form-field">
+                    <label>Rate limit banner selector</label>
+                    <input type="text" id="sel-rate-limit" />
+                    <p class="field-hint">The element that appears when you hit a usage limit</p>
+                </div>
+                <div class="form-field">
+                    <label>Session expired selector</label>
+                    <input type="text" id="sel-session-expired" />
+                    <p class="field-hint">Element present on the claude.ai login / redirect page</p>
+                </div>
+
+                <button class="btn btn-primary" id="btn-save-selectors">Save Selectors</button>
+                <button class="btn btn-outline" id="btn-reset-selectors" style="margin-left:8px">Reset to
+                    Defaults</button>
+                <div id="sel-saved" class="success-msg hidden">✅ Saved — reload any open claude.ai tabs to apply</div>
+            </div>
+        </section>
+
+        <!-- ── Security tab ─────────────────────────────── -->
+        <section id="tab-security" class="tab hidden">
+            <div class="tab-header">
+                <h1 class="tab-title">Security</h1>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Change Master Password</h2>
+                <div class="form-field">
+                    <label>Current password</label>
+                    <input type="password" id="sec-old-pw" />
+                </div>
+                <div class="form-field">
+                    <label>New password</label>
+                    <input type="password" id="sec-new-pw" />
+                </div>
+                <div class="form-field">
+                    <label>Confirm new password</label>
+                    <input type="password" id="sec-confirm-pw" />
+                </div>
+                <div id="sec-error" class="error-msg hidden"></div>
+                <div id="sec-success" class="success-msg hidden">✅ Password changed. All credentials re-encrypted.</div>
+                <button class="btn btn-primary" id="btn-change-pw">Change Password</button>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Auto-lock</h2>
+                <div class="form-field">
+                    <label>Lock after inactivity (minutes)</label>
+                    <input type="number" id="sec-lock-timeout" min="1" max="480" style="width:80px" />
+                </div>
+                <button class="btn btn-primary" id="btn-save-lock">Save</button>
+                <div id="lock-saved" class="success-msg hidden">✅ Saved</div>
+            </div>
+        </section>
+
+        <!-- ── Switch log tab ───────────────────────────── -->
+        <section id="tab-log" class="tab hidden">
+            <div class="tab-header">
+                <h1 class="tab-title">Switch Log</h1>
+                <button class="btn btn-outline btn-danger-outline" id="btn-clear-log">Clear Log</button>
+            </div>
+
+            <div id="log-empty" class="empty-state hidden">No switches recorded yet.</div>
+            <table class="data-table" id="log-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>From</th>
+                        <th>To</th>
+                    </tr>
+                </thead>
+                <tbody id="log-tbody">
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ── Data tab ─────────────────────────────────── -->
+        <section id="tab-data" class="tab hidden">
+            <div class="tab-header">
+                <h1 class="tab-title">Data Management</h1>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Export Encrypted Backup</h2>
+                <p class="section-desc">
+                    Downloads all extension data as a JSON file. Credentials remain encrypted — you'll need your master
+                    password to use them after reimporting.
+                </p>
+                <button class="btn btn-primary" id="btn-export">⬇️ Export Backup</button>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Import Backup</h2>
+                <p class="section-desc">
+                    Restores data from a previously exported backup file. This will <strong>replace</strong> all current
+                    data.
+                </p>
+                <input type="file" id="import-file" accept=".json" style="margin-bottom:10px;display:block" />
+                <button class="btn btn-primary" id="btn-import">⬆️ Import Backup</button>
+                <div id="import-error" class="error-msg hidden"></div>
+                <div id="import-success" class="success-msg hidden">✅ Backup imported. Reload the extension.</div>
+            </div>
+
+            <div class="card card-danger">
+                <h2 class="card-title" style="color:#ef4444">⚠️ Danger Zone</h2>
+                <p class="section-desc">This will permanently delete all accounts, passwords, cookies, and settings.
+                    There is no undo.</p>
+                <button class="btn btn-danger" id="btn-wipe">🗑️ Wipe All Data</button>
+            </div>
+        </section>
+
+    </main>
+
+    <script src="options.js"></script>
+</body>
+
+</html>

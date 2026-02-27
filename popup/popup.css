@@ -1,0 +1,556 @@
+/* =====================================================
+   popup.css — Chrome Extension Popup
+   Dark, premium design with subtle animations
+   ===================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --bg: #0e0e16;
+    --bg2: #14141e;
+    --bg3: #1a1a28;
+    --border: rgba(255, 255, 255, 0.08);
+    --border2: rgba(255, 255, 255, 0.12);
+    --text: #e8e8f4;
+    --text2: rgba(255, 255, 255, 0.55);
+    --text3: rgba(255, 255, 255, 0.35);
+    --accent: #4F46E5;
+    --accent2: #7C3AED;
+    --accent-soft: rgba(79, 70, 229, 0.15);
+    --danger: #ef4444;
+    --danger-soft: rgba(239, 68, 68, 0.12);
+    --success: #10b981;
+    --radius: 10px;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    width: 320px;
+    min-height: 200px;
+    max-height: 580px;
+    overflow-y: auto;
+    font-size: 13px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border2) transparent;
+}
+
+.screen {
+    padding: 20px;
+    animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ── Lock screen ───────────────────────────────── */
+.lock-icon {
+    font-size: 40px;
+    text-align: center;
+    margin-bottom: 14px;
+    filter: drop-shadow(0 0 12px rgba(79, 70, 229, 0.4));
+}
+
+.app-title {
+    font-size: 15px;
+    font-weight: 700;
+    text-align: center;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+
+.lock-subtitle {
+    font-size: 12px;
+    color: var(--text2);
+    text-align: center;
+    margin-bottom: 18px;
+}
+
+.field-wrap {
+    margin-bottom: 10px;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"] {
+    width: 100%;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+input:focus {
+    border-color: var(--accent);
+}
+
+.hint {
+    font-size: 11px;
+    color: var(--text3);
+    line-height: 1.5;
+    margin-top: 12px;
+    padding: 10px;
+    background: var(--bg3);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+/* ── Buttons ───────────────────────────────────── */
+.btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 16px;
+    transition: background 0.12s, transform 0.1s, opacity 0.1s;
+}
+
+.btn:active {
+    transform: scale(0.97);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-full {
+    width: 100%;
+    margin-top: 10px;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff;
+}
+
+.btn-primary:hover {
+    opacity: 0.92;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+}
+
+.btn-outline:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+    color: var(--text);
+}
+
+.btn-danger {
+    background: var(--danger-soft);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    color: var(--danger);
+}
+
+.btn-danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+}
+
+/* ── Top bar ───────────────────────────────────── */
+.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.screen-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.top-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.icon-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 6px 8px;
+    line-height: 1;
+    transition: background 0.12s;
+}
+
+.icon-btn:hover {
+    background: var(--bg2);
+    border-color: var(--border2);
+}
+
+.back-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    padding: 4px 0;
+}
+
+.back-btn:hover {
+    opacity: 0.8;
+}
+
+/* ── Active account card ───────────────────────── */
+.active-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(79, 70, 229, 0.25);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+}
+
+.active-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.active-info {
+    flex: 1;
+}
+
+.active-label {
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.active-email {
+    font-size: 11.5px;
+    color: var(--text2);
+    margin-top: 2px;
+}
+
+.badge-active {
+    font-size: 10px;
+    font-weight: 700;
+    background: var(--accent);
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 999px;
+}
+
+/* ── Account list ──────────────────────────────── */
+.account-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.account-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 12px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: default;
+    transition: border-color 0.12s;
+}
+
+.account-row:hover {
+    border-color: var(--border2);
+}
+
+.account-row .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.account-row .acc-label {
+    flex: 1;
+    font-weight: 600;
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.account-row .acc-email {
+    font-size: 11px;
+    color: var(--text3);
+}
+
+.acc-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.acc-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    color: var(--text2);
+    padding: 4px 9px;
+    transition: background 0.1s, color 0.1s;
+}
+
+.acc-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+.acc-btn-switch {
+    background: var(--accent-soft);
+    border-color: rgba(79, 70, 229, 0.25);
+    color: #818cf8;
+}
+
+.acc-btn-switch:hover {
+    background: rgba(79, 70, 229, 0.25);
+}
+
+.acc-btn-set-active {
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(16, 185, 129, 0.2);
+    color: rgba(16, 185, 129, 0.8);
+    font-size: 10px;
+}
+
+.acc-btn-set-active:hover {
+    background: rgba(16, 185, 129, 0.18);
+    color: #10b981;
+}
+
+/* ── Quick stats ───────────────────────────────── */
+.quick-stats {
+    display: flex;
+    gap: 4px;
+    margin-top: 14px;
+    margin-bottom: 6px;
+}
+
+.stat {
+    flex: 1;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 6px;
+    text-align: center;
+}
+
+.stat-val {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.stat-label {
+    font-size: 10px;
+    color: var(--text3);
+    margin-top: 2px;
+}
+
+/* ── Options / small link ──────────────────────── */
+.options-link {
+    display: block;
+    text-align: center;
+    font-size: 12px;
+    color: var(--accent);
+    margin-top: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    opacity: 0.8;
+}
+
+.options-link:hover {
+    opacity: 1;
+}
+
+/* ── Error message ─────────────────────────────── */
+.error-msg {
+    background: var(--danger-soft);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: 8px;
+    color: var(--danger);
+    font-size: 12px;
+    padding: 9px 12px;
+    margin-bottom: 10px;
+}
+
+/* ── Form ──────────────────────────────────────── */
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.field-label {
+    display: block;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text2);
+    margin-bottom: 4px;
+}
+
+.color-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+input[type="color"] {
+    width: 40px;
+    height: 36px;
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    background: var(--bg3);
+    cursor: pointer;
+    padding: 3px;
+}
+
+.color-hint {
+    font-size: 11px;
+    color: var(--text3);
+}
+
+/* ── Settings ──────────────────────────────────── */
+.settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 14px;
+}
+
+.setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 11px 2px;
+    border-bottom: 1px solid var(--border);
+}
+
+.setting-row:last-child {
+    border-bottom: none;
+}
+
+.setting-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+}
+
+.setting-desc {
+    font-size: 11px;
+    color: var(--text3);
+    line-height: 1.4;
+}
+
+.setting-select {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: 7px;
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+    padding: 5px 8px;
+    cursor: pointer;
+    outline: none;
+    flex-shrink: 0;
+}
+
+.setting-input {
+    width: 60px;
+    padding: 6px 8px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* Toggle */
+.toggle {
+    position: relative;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.toggle input {
+    display: none;
+}
+
+.toggle-track {
+    display: block;
+    width: 38px;
+    height: 22px;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    transition: background 0.2s, border-color 0.2s;
+    position: relative;
+}
+
+.toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--text3);
+    transition: transform 0.2s, background 0.2s;
+}
+
+.toggle input:checked+.toggle-track {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.toggle input:checked+.toggle-track::after {
+    transform: translateX(16px);
+    background: #fff;
+}

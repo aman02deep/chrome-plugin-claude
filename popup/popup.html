@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude Session Manager</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+  <!-- ── Screen: Lock ───────────────────────────────────── -->
+  <div id="screen-lock" class="screen">
+    <div class="lock-icon">🔐</div>
+    <h1 class="app-title">Claude Session Manager</h1>
+    <p class="lock-subtitle" id="lock-subtitle">Enter your master password to unlock</p>
+    <div class="field-wrap">
+      <input type="password" id="master-password" placeholder="Master password" autocomplete="current-password" />
+    </div>
+    <div id="lock-error" class="error-msg hidden"></div>
+    <button class="btn btn-primary btn-full" id="btn-unlock">Unlock</button>
+    <p class="hint" id="hint-first-launch" style="display:none">
+      This is your first launch. Choose a master password — it encrypts all your credentials locally. <strong>There is no recovery if you forget it.</strong>
+    </p>
+  </div>
+
+  <!-- ── Screen: Dashboard ─────────────────────────────── -->
+  <div id="screen-dashboard" class="screen hidden">
+    <div class="top-bar">
+      <h2 class="screen-title">Accounts</h2>
+      <div class="top-actions">
+        <button class="icon-btn" id="btn-settings" title="Settings">⚙️</button>
+        <button class="icon-btn" id="btn-lock" title="Lock">🔒</button>
+      </div>
+    </div>
+
+    <div id="active-account-card" class="active-card">
+      <div class="active-dot" id="active-dot"></div>
+      <div class="active-info">
+        <div class="active-label" id="active-label">No active account</div>
+        <div class="active-email" id="active-email"></div>
+      </div>
+      <span class="badge-active">Active</span>
+    </div>
+
+    <div id="account-list" class="account-list">
+      <!-- Populated by popup.js -->
+    </div>
+
+    <button class="btn btn-outline btn-full" id="btn-add-account">+ Add Account</button>
+
+    <div class="quick-stats">
+      <div class="stat">
+        <div class="stat-val" id="stat-count">0</div>
+        <div class="stat-label">Accounts</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val" id="stat-switches">0</div>
+        <div class="stat-label">Switches</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val" id="stat-last">—</div>
+        <div class="stat-label">Last Switch</div>
+      </div>
+    </div>
+
+    <a class="options-link" id="btn-options">Open Full Settings</a>
+  </div>
+
+  <!-- ── Screen: Add / Edit Account ────────────────────── -->
+  <div id="screen-account-form" class="screen hidden">
+    <div class="top-bar">
+      <button class="back-btn" id="btn-back-from-form">← Back</button>
+      <h2 class="screen-title" id="form-title">Add Account</h2>
+    </div>
+
+    <div class="form">
+      <label class="field-label">Label</label>
+      <input type="text" id="field-label" placeholder="e.g. Personal, Work, Backup" maxlength="40" />
+
+      <label class="field-label">Email (optional — stored encrypted)</label>
+      <input type="email" id="field-email" placeholder="you@example.com" />
+
+      <label class="field-label">Password (optional — stored encrypted)</label>
+      <input type="password" id="field-password" placeholder="Password" autocomplete="new-password" />
+
+      <label class="field-label">Color</label>
+      <div class="color-row">
+        <input type="color" id="field-color" value="#4F46E5" />
+        <span class="color-hint">Shown in the widget pill</span>
+      </div>
+
+      <div id="form-error" class="error-msg hidden"></div>
+
+      <button class="btn btn-primary btn-full" id="btn-save-account">Save Account</button>
+      <button class="btn btn-danger btn-full hidden" id="btn-delete-account">Delete Account</button>
+    </div>
+  </div>
+
+  <!-- ── Screen: Settings ───────────────────────────────── -->
+  <div id="screen-settings" class="screen hidden">
+    <div class="top-bar">
+      <button class="back-btn" id="btn-back-from-settings">← Back</button>
+      <h2 class="screen-title">Settings</h2>
+    </div>
+
+    <div class="settings-list">
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Auto-detect rate limit</div>
+          <div class="setting-desc">Show alert when Claude hits a usage limit</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="set-auto-detect" />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Auto-save context on switch</div>
+          <div class="setting-desc">Always save context before switching</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="set-auto-save" />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Context mode</div>
+          <div class="setting-desc">How the handoff prompt is built</div>
+        </div>
+        <select class="setting-select" id="set-context-mode">
+          <option value="structured">Structured (default)</option>
+          <option value="full">Full transcript</option>
+          <option value="manual">Manual</option>
+        </select>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Auto-lock timeout</div>
+          <div class="setting-desc">Minutes of inactivity before locking</div>
+        </div>
+        <input type="number" class="setting-input" id="set-lock-timeout" min="1" max="480" />
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Switch throttle</div>
+          <div class="setting-desc">Warn if switching faster than (minutes)</div>
+        </div>
+        <input type="number" class="setting-input" id="set-throttle" min="1" max="60" />
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-full" id="btn-save-settings">Save Settings</button>
+    <a class="options-link" id="btn-full-options">Open Full Options Page →</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
