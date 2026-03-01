@@ -489,21 +489,52 @@ async function handleMessage(message, sender) {
         }
 
         case 'SAVE_CONTEXT': {
-            const { conversation, prompt } = message;
-            const entry = {
+            const { conversation, prompt, accountLabel } = message;
+            const chatId = conversation?.chatId || null;
+            const threadId = conversation?.threadId || chatId || null;
+            const title = conversation?.originalTitle || conversation?.title || 'Untitled';
+
+            const subEntry = {
                 id: crypto.randomUUID(),
-                title: conversation?.title || 'Untitled',
-                url: conversation?.url || '',
+                accountLabel: accountLabel || 'Unknown account',
+                chatId,
                 prompt,
                 savedAt: new Date().toISOString(),
             };
+
             // Save as latest pendingHandoff (used by the post-switch banner)
-            await storageSet({ pendingHandoff: entry });
-            // Also append to history (cap at 20)
+            await storageSet({ pendingHandoff: { threadId, title, prompt } });
+
+            // Load history and migrate any old flat format entries
             const { contextHistory } = await storageGet(['contextHistory']);
-            const history = contextHistory || [];
-            history.unshift(entry);
-            if (history.length > 20) history.splice(20);
+            const history = (contextHistory || []).map(h => {
+                // Migrate old flat entries (no saves array) to new grouped format
+                if (!h.saves) {
+                    return { id: h.id, threadId: h.threadId || h.chatId || h.id, title: h.title, savedAt: h.savedAt, saves: [{ id: h.id + '-s0', accountLabel: 'Account A', chatId: h.chatId, prompt: h.prompt, savedAt: h.savedAt }] };
+                }
+                return h;
+            });
+
+            // Find existing group by threadId or create new one
+            const groupIdx = threadId ? history.findIndex(h => h.threadId === threadId) : -1;
+            if (groupIdx !== -1) {
+                // Append sub-entry to existing group and move to top
+                const group = history.splice(groupIdx, 1)[0];
+                group.savedAt = subEntry.savedAt;
+                group.saves.push(subEntry);
+                history.unshift(group);
+            } else {
+                // New group
+                history.unshift({
+                    id: crypto.randomUUID(),
+                    threadId: threadId || subEntry.id,
+                    title,
+                    savedAt: subEntry.savedAt,
+                    saves: [subEntry],
+                });
+            }
+
+            if (history.length > 50) history.splice(50);
             await storageSet({ contextHistory: history });
             return { success: true };
         }
@@ -515,16 +546,35 @@ async function handleMessage(message, sender) {
 
         case 'GET_CONTEXT_HISTORY': {
             const { contextHistory } = await storageGet(['contextHistory']);
-            return { history: contextHistory || [] };
+            // Migrate and return
+            const history = (contextHistory || []).map(h => {
+                if (!h.saves) {
+                    return { id: h.id, threadId: h.threadId || h.chatId || h.id, title: h.title, savedAt: h.savedAt, saves: [{ id: h.id + '-s0', accountLabel: 'Account A', chatId: h.chatId, prompt: h.prompt, savedAt: h.savedAt }] };
+                }
+                return h;
+            });
+            return { history };
         }
 
         case 'DELETE_CONTEXT': {
+            const { groupId, saveId } = message;
             const { contextHistory } = await storageGet(['contextHistory']);
-            const filtered = (contextHistory || []).filter((e) => e.id !== message.id);
-            await storageSet({ contextHistory: filtered });
-            // Clear pendingHandoff if it was the same entry
+            let history = contextHistory || [];
+
+            if (saveId) {
+                // Delete a specific sub-entry
+                history = history.map(g => ({ ...g, saves: g.saves.filter(s => s.id !== saveId) }))
+                    .filter(g => g.saves.length > 0);
+            } else if (groupId) {
+                // Delete entire group
+                history = history.filter(g => g.id !== groupId);
+            }
+
+            await storageSet({ contextHistory: history });
             const { pendingHandoff } = await storageGet(['pendingHandoff']);
-            if (pendingHandoff?.id === message.id) await storageSet({ pendingHandoff: null });
+            if (pendingHandoff?.id === groupId || pendingHandoff?.id === saveId) {
+                await storageSet({ pendingHandoff: null });
+            }
             return { success: true };
         }
 

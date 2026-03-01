@@ -37,7 +37,8 @@
                     el.matches(SELECTORS.humanMessage);
 
                 const role = isHuman ? 'user' : 'assistant';
-                const content = el.innerText.trim();
+                let content = el.innerText.trim();
+
                 if (content) {
                     messages.push({ role, content });
                 }
@@ -58,8 +59,16 @@
         // Collect file/artifact names mentioned
         const fileNames = extractFileNames();
 
+        // Find true chat title (Claude's document.title usually just repeats the first user prompt)
+        // The real generated title is usually the "active" item in the history sidebar.
+        let chatTitle = document.title.replace(' - Claude', '').trim();
+        const activeSidebarItem = document.querySelector('nav a[href="' + window.location.pathname + '"]');
+        if (activeSidebarItem) {
+            chatTitle = activeSidebarItem.innerText.trim() || chatTitle;
+        }
+
         return {
-            title: document.title.replace(' - Claude', '').trim(),
+            title: chatTitle,
             url: window.location.href,
             extractedAt: new Date().toISOString(),
             messageCount: messages.length,

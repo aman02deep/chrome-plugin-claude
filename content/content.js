@@ -22,6 +22,7 @@
     let handoffPromptText = null;
     let lastSwitchTime = 0;
     let pendingFromId = null;
+    let lastSavedConversation = null; // Tracks the most recently saved conversation for bridge writing on switch
 
     const SELECTORS_DEFAULT = {
         rateLimitBanner: '[data-testid="rate-limit-message"], .rate-limit, [class*="UsageLimitBanner"], [class*="rate-limit"]',
@@ -34,6 +35,7 @@
         // Small delay to let the page fully settle
         await sleep(1200);
         await loadState();
+        await loadHandoffBridge();
         buildWidget();
         startRateLimitWatcher();
         checkForPendingHandoff();
@@ -55,6 +57,33 @@
         } catch (e) {
             // Extension might be locked — widget shows lock state
         }
+    }
+
+    // ─── Handoff Bridge (cross-account Thread ID storage) ─────────────────────
+
+    async function loadHandoffBridge() {
+        try {
+            const result = await chrome.storage.local.get(['__csmHandoffBridge']);
+            const b = result.__csmHandoffBridge || {};
+            const FOUR_HOURS = 4 * 60 * 60 * 1000;
+            if (b.savedAt && (Date.now() - b.savedAt) < FOUR_HOURS) {
+                window.__CSM_handoffBridge = b;
+            } else {
+                // Bridge is stale or missing — discard
+                window.__CSM_handoffBridge = {};
+                if (b.savedAt) chrome.storage.local.remove(['__csmHandoffBridge']);
+            }
+        } catch (e) {
+            window.__CSM_handoffBridge = {};
+        }
+    }
+
+    async function saveHandoffBridge(threadId, originalTitle, chatId) {
+        const bridge = { threadId, originalTitle, sourceChatId: chatId, savedAt: Date.now() };
+        window.__CSM_handoffBridge = bridge;
+        try {
+            await chrome.storage.local.set({ __csmHandoffBridge: bridge });
+        } catch (e) { /* non-critical */ }
     }
 
     function handleBackgroundMessage(msg) {
@@ -167,10 +196,140 @@
         </div>
       </div>
 
-      <button class="csm-btn csm-btn-primary" id="csm-switch-save">
-        🔄 Switch + Save Context
-      </button>
+      <div class="csm-section">
+        <div class="csm-section-label">CONTEXT HISTORY <span id="csm-history-count" style="opacity:0.5;font-weight:400;font-size:10px"></span></div>
+        <div id="csm-history-list"><div class="csm-empty">Loading…</div></div>
+      </div>
     `;
+    }
+
+    function buildHistoryGroupHTML(group) {
+        const relTime = formatRelTime(group.savedAt);
+        const saveCount = group.saves?.length || 0;
+        const subRows = (group.saves || []).map((s, i) => `
+          <div class="csm-history-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(group.id)}">
+            <span class="csm-history-save-label">${escHtml(s.accountLabel || 'Account')} · ${formatRelTime(s.savedAt)}</span>
+            <div class="csm-history-save-actions">
+              <button class="csm-hist-btn" data-action="copy-save" data-save-id="${escHtml(s.id)}" title="Copy this session's prompt">Copy</button>
+              <button class="csm-hist-btn csm-hist-btn-del" data-action="del-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(group.id)}" title="Delete this session">✕</button>
+            </div>
+          </div>
+        `).join('');
+
+        return `
+        <div class="csm-history-group" data-group-id="${escHtml(group.id)}">
+          <div class="csm-history-group-header">
+            <span class="csm-history-group-title" title="${escHtml(group.title)}">${escHtml(group.title)}</span>
+            <div class="csm-history-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${relTime}</div>
+            <div class="csm-history-group-actions">
+              <button class="csm-hist-btn csm-hist-btn-primary" data-action="copy-consolidated" data-group-id="${escHtml(group.id)}" title="Copy merged prompt from all sessions">📋 Copy All</button>
+              <button class="csm-hist-btn csm-hist-btn-del" data-action="del-group" data-group-id="${escHtml(group.id)}" title="Delete entire thread">🗑️</button>
+            </div>
+          </div>
+          <div class="csm-history-saves">${subRows}</div>
+        </div>`;
+    }
+
+    function formatRelTime(isoStr) {
+        if (!isoStr) return '';
+        const diff = Date.now() - new Date(isoStr).getTime();
+        const min = Math.floor(diff / 60_000);
+        if (min < 1) return 'just now';
+        if (min < 60) return `${min}m ago`;
+        const hr = Math.floor(min / 60);
+        if (hr < 24) return `${hr}h ago`;
+        return `${Math.floor(hr / 24)}d ago`;
+    }
+
+    async function loadHistoryIntoPanel() {
+        const listEl = document.getElementById('csm-history-list');
+        const countEl = document.getElementById('csm-history-count');
+        if (!listEl) return;
+
+        const resp = await chrome.runtime.sendMessage({ type: 'GET_CONTEXT_HISTORY' });
+        const history = resp.history || [];
+        if (countEl) countEl.textContent = history.length ? `(${history.length})` : '';
+
+        if (!history.length) {
+            listEl.innerHTML = '<div class="csm-empty">No context saved yet.</div>';
+            return;
+        }
+
+        listEl.innerHTML = history.map(buildHistoryGroupHTML).join('');
+
+        // Store saves lookup for copy handlers
+        window.__CSM_historyData = history;
+
+        listEl.querySelectorAll('[data-action]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.action;
+                const groupId = btn.dataset.groupId;
+                const saveId = btn.dataset.saveId;
+                const allHistory = window.__CSM_historyData || [];
+
+                if (action === 'copy-consolidated') {
+                    const group = allHistory.find(g => g.id === groupId);
+                    if (group) {
+                        const prompt = buildConsolidatedPrompt(group);
+                        await navigator.clipboard.writeText(prompt);
+                        showToast('📋 Consolidated prompt copied! Paste into new chat.');
+                    }
+                } else if (action === 'copy-save') {
+                    const group = allHistory.find(g => g.saves?.some(s => s.id === saveId));
+                    const save = group?.saves?.find(s => s.id === saveId);
+                    if (save?.prompt) {
+                        await navigator.clipboard.writeText(save.prompt);
+                        showToast('📋 Session prompt copied!');
+                    }
+                } else if (action === 'del-save') {
+                    if (!confirm('Delete this session from the thread?')) return;
+                    await chrome.runtime.sendMessage({ type: 'DELETE_CONTEXT', saveId });
+                    loadHistoryIntoPanel();
+                } else if (action === 'del-group') {
+                    if (!confirm('Delete entire thread history?')) return;
+                    await chrome.runtime.sendMessage({ type: 'DELETE_CONTEXT', groupId });
+                    loadHistoryIntoPanel();
+                }
+            });
+        });
+    }
+
+    function extractSessionContent(prompt, fullContent) {
+        if (!prompt) return '';
+        if (fullContent) {
+            // ### Context already contains the summary bullets + Recent messages verbatim.
+            // Stop before ### Most Recent Exchange to avoid duplicating that content.
+            const contextMatch = prompt.match(/### Context\n([\s\S]*?)(?=\n### Most Recent Exchange|\n### Immediate|\n---\n|\[CSM-Thread-ID|$)/);
+            if (contextMatch) return contextMatch[1].trim();
+            // Fallback: strip outer template noise
+            return prompt
+                .replace(/^## Continuing a Previous Session[\s\S]*?### Context\n/, '### Context\n')
+                .replace(/### Most Recent Exchange[\s\S]*$/, '')
+                .replace(/\[CSM-Thread-ID:[^\]]*\]\s*$/, '')
+                .replace(/---\nPlease confirm[\s\S]*$/, '')
+                .trim();
+        } else {
+            // Older sessions: just the Context section up to Most Recent Exchange
+            const match = prompt.match(/### Context\n([\s\S]*?)(?=\n### Most Recent Exchange|\n---\n|$)/);
+            return match ? match[1].trim() : prompt.slice(0, 800) + '\u2026';
+        }
+    }
+
+    function buildConsolidatedPrompt(group) {
+        const sessions = group.saves || [];
+        if (!sessions.length) return '';
+
+        const sessionSections = sessions.map((s, i) => {
+            const isLast = i === sessions.length - 1;
+            const label = `Session ${i + 1} \u2014 ${s.accountLabel} (${formatRelTime(s.savedAt)})`;
+            const content = extractSessionContent(s.prompt, isLast);
+            return isLast
+                ? `### ${label} \u2190 MOST RECENT\n${content}`
+                : `### ${label}\n${content}`;
+        }).join('\n\n---\n\n');
+
+        return `## Continuing a Previous Session (${sessions.length} sessions)\n\nI've reached my usage limit on another account and I'm continuing our conversation here. Please read the full context below, acknowledge it briefly, and continue where we left off.\n\n### Conversation Thread\n${group.title}\n\n${sessionSections}`;
     }
 
     function updatePill() {
@@ -207,7 +366,10 @@
         widgetOpen = !widgetOpen;
         panel.classList.toggle('csm-hidden', !widgetOpen);
         if (widgetOpen) {
-            loadState().then(() => refreshPanel());
+            loadState().then(() => {
+                refreshPanel();
+                loadHistoryIntoPanel();
+            });
         }
     }
 
@@ -244,12 +406,6 @@
             handleDownload();
         });
 
-        panel.querySelector('#csm-switch-save')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const nextAccount = accounts.find((a) => a.id !== activeAccountId);
-            if (nextAccount) handleSwitch(nextAccount.id, true);
-            else showToast('⚠️ No other account to switch to. Add one in the popup.');
-        });
     }
 
     // ─── Context extraction ───────────────────────────────────────────────────
@@ -259,21 +415,101 @@
             return { conversation: null, prompt: 'Could not extract conversation — please try again.' };
         }
         const conversation = window.__CS_extractConversation();
+
+        // Associate the context with this specific chat UI to prevent duplicates
+        const match = window.location.pathname.match(/^\/chat\/([a-f0-9\-]+)/);
+        if (match && conversation) {
+            conversation.chatId = match[1];
+        }
+
+        // Thread ID & Original Title come from storage (written by the previous account's save).
+        // We read synchronously from a cached copy held in memory (set at page load).
+        // See: loadHandoffBridge() called during init.
+        const bridge = window.__CSM_handoffBridge || {};
+        const FOUR_HOURS = 4 * 60 * 60 * 1000;
+        const isBridgeValid = bridge.threadId &&
+            bridge.sourceChatId &&
+            bridge.savedAt &&
+            (Date.now() - bridge.savedAt) < FOUR_HOURS;
+        let threadId, originalTitle;
+
+        const chatId = conversation?.chatId;
+        // Bridge is usable if it's valid AND either:
+        //   (a) not yet consumed by any chat, OR
+        //   (b) already consumed by THIS specific chat (repeated saves on same chat)
+        const bridgeUsable = isBridgeValid &&
+            bridge.sourceChatId !== chatId &&
+            (!bridge.consumedByChatId || bridge.consumedByChatId === chatId);
+
+        if (bridgeUsable) {
+            // Inherit thread from previous account's context
+            threadId = bridge.threadId;
+            originalTitle = bridge.originalTitle;
+            // Mark bridge as consumed by this chat so OTHER chats don't inherit it
+            if (!bridge.consumedByChatId) {
+                const consumed = { ...bridge, consumedByChatId: chatId };
+                window.__CSM_handoffBridge = consumed;
+                chrome.storage.local.set({ __csmHandoffBridge: consumed });
+            }
+        } else {
+            // Different chat or no/stale bridge — fresh group anchored to this chatId
+            threadId = chatId || crypto.randomUUID();
+            originalTitle = (isBridgeValid ? bridge.originalTitle : null) || conversation?.title || 'Untitled';
+        }
+
+        if (conversation) {
+            conversation.threadId = threadId;
+            conversation.originalTitle = originalTitle;
+
+            // Strip leftover boilerplate from previous handoff pastes
+            conversation.messages = (conversation.messages || []).map((msg) => {
+                let content = msg.content;
+
+                if (msg.role === 'user' && content.includes('## Continuing a Previous Session')) {
+                    const summaryMatch = content.match(/\*\*Earlier conversation summary:\*\*\s*([\s\S]*?)\n\n\*\*Recent messages/);
+                    const verbatimMatch = content.match(/\*\*Recent messages \(verbatim\):\*\*\s*([\s\S]*?)\n\n### Most Recent Exchange/);
+                    const manualMatch = content.match(/## Continuing a Previous Session[\s\S]*?### Context\n([\s\S]*?)\n\n### Most Recent Exchange/);
+
+                    if (summaryMatch || verbatimMatch) {
+                        content = (summaryMatch ? summaryMatch[1].trim() + '\n\n' : '') +
+                            (verbatimMatch ? verbatimMatch[1].trim() : '');
+                    } else if (manualMatch) {
+                        content = manualMatch[1].trim();
+                    } else {
+                        content = content.replace(/## Continuing a Previous Session[\s\S]*?### Context\n/, '')
+                            .replace(/### Most Recent Exchange[\s\S]*$/, '');
+                    }
+                }
+
+                content = content.replace(/\[CSM-Thread-ID:.*?\]\s*$/m, '').trim();
+                content = content.replace(/^\*\*You:\*\*\s*/i, '');
+                content = content.replace(/^\*\*Claude:\*\*\s*/i, '');
+
+                return { ...msg, content };
+            }).filter((msg) => msg.content.trim() !== '');
+        }
+
         const mode = settings.contextMode || 'structured';
         const lastN = settings.lastNMessages || 6;
         const template = settings.handoffTemplate || null;
-        const prompt = buildHandoffPromptInline(conversation, { mode, lastNMessages: lastN, template });
+        const prompt = buildHandoffPromptInline(conversation, { mode, lastNMessages: lastN, template, threadId });
         return { conversation, prompt };
     }
 
     // Inlined version of context-builder.js (content scripts can't import ES modules)
     function buildHandoffPromptInline(conversation, options) {
-        const { mode = 'structured', lastNMessages = 6, template = null } = options;
-        const { title, messages, extractedAt } = conversation;
+        const { mode = 'structured', lastNMessages = 6, template = null, threadId } = options;
+        const { title, messages, originalTitle } = conversation;
         const DEFAULT_TEMPLATE = `## Continuing a Previous Session\n\nI've reached my usage limit on another account and I'm continuing our conversation here. Please read the context below, acknowledge it briefly, and continue where we left off.\n\n### Conversation Topic\n{title}\n\n### Context\n{context}\n\n### Most Recent Exchange\n{recent}\n\n### Immediate Next Step\n{nextStep}\n\n---\nPlease confirm you have the context and we'll continue.`;
 
+        const finalTitle = originalTitle || title || 'Untitled';
+
+        const attachThreadId = (p) => {
+            return p + `\n\n[CSM-Thread-ID: ${threadId} | Original Title: ${finalTitle}]`;
+        };
+
         if (!messages || messages.length === 0) {
-            return `## Continuing a Previous Session\n\nNo conversation content could be extracted. Topic: ${title || 'Unknown'}`;
+            return attachThreadId(`## Continuing a Previous Session\n\nNo conversation content could be extracted. Topic: ${title || 'Unknown'}`);
         }
 
         const fmt = (msgs) => msgs.map((m) => `**${m.role === 'user' ? 'You' : 'Claude'}:** ${m.content.trim()}`).join('\n\n');
@@ -284,12 +520,12 @@
         };
         const apply = (tmpl, vars) => tmpl.replace('{title}', vars.title).replace('{context}', vars.context).replace('{recent}', vars.recent).replace('{nextStep}', vars.nextStep);
 
-        if (mode === 'manual') return fmt(messages);
+        if (mode === 'manual') return attachThreadId(fmt(messages));
 
         if (mode === 'full') {
-            return apply(template || DEFAULT_TEMPLATE, {
+            return attachThreadId(apply(template || DEFAULT_TEMPLATE, {
                 title: title || 'Untitled', context: fmt(messages), recent: fmt(messages.slice(-3)), nextStep: nextStep(),
-            });
+            }));
         }
 
         // structured
@@ -300,9 +536,9 @@
             context += '**Earlier conversation summary:**\n' + compress(earlier) + '\n\n**Recent messages (verbatim):**\n';
         }
         context += fmt(recent);
-        return apply(template || DEFAULT_TEMPLATE, {
+        return attachThreadId(apply(template || DEFAULT_TEMPLATE, {
             title: title || 'Untitled', context, recent: fmt(messages.slice(-3)), nextStep: nextStep(),
-        });
+        }));
     }
 
     // ─── Manual Editor ────────────────────────────────────────────────────────
@@ -361,27 +597,41 @@
 
     // ─── Actions ──────────────────────────────────────────────────────────────
 
-    async function handleSaveContext(silent = false) {
+    // writeBridge=true only when called as part of an explicit account handoff (Switch+Save)
+    async function handleSaveContext(silent = false, writeBridge = false) {
         const { conversation, prompt, cancelled } = await promptWithManualEditorIfNeeded();
         if (cancelled) return null;
 
         handoffPromptText = prompt;
-        await chrome.runtime.sendMessage({ type: 'SAVE_CONTEXT', conversation, prompt });
-        if (!silent) showToast('✅ Context saved!');
-        return prompt;
+        const activeAccount = accounts.find(a => a.id === activeAccountId);
+        const accountLabel = activeAccount?.label || 'Unknown account';
+        await chrome.runtime.sendMessage({ type: 'SAVE_CONTEXT', conversation, prompt, accountLabel });
+        // Always track the last saved conversation so switch can write the bridge
+        if (conversation?.threadId) lastSavedConversation = conversation;
+        if (writeBridge && conversation?.threadId) {
+            await saveHandoffBridge(conversation.threadId, conversation.originalTitle, conversation.chatId);
+        }
+        if (!silent) showToast('\u2705 Context saved!');
+        return { prompt, conversation };
     }
 
     async function handleCopyHandoff() {
         let prompt = handoffPromptText;
+        let savedConversation = null;
         if (!prompt) {
             const res = await promptWithManualEditorIfNeeded();
             if (res.cancelled) return;
             prompt = res.prompt;
+            savedConversation = res.conversation;
             handoffPromptText = prompt;
-            await chrome.runtime.sendMessage({ type: 'SAVE_CONTEXT', conversation: null, prompt });
+            await chrome.runtime.sendMessage({ type: 'SAVE_CONTEXT', conversation: savedConversation, prompt });
+        }
+        // Write bridge so the next account can inherit this thread's ID
+        if (savedConversation?.threadId) {
+            await saveHandoffBridge(savedConversation.threadId, savedConversation.originalTitle, savedConversation.chatId);
         }
         await navigator.clipboard.writeText(prompt);
-        showToast('📋 Handoff prompt copied to clipboard!');
+        showToast('\ud83d\udccb Handoff prompt copied to clipboard!');
     }
 
     async function handleDownload() {
@@ -389,15 +639,19 @@
         if (cancelled) return;
 
         handoffPromptText = prompt;
+        // Write bridge so the next account can inherit this thread's ID
+        if (conversation?.threadId) {
+            await saveHandoffBridge(conversation.threadId, conversation.originalTitle, conversation.chatId);
+        }
         const blob = new Blob([prompt], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        const title = conversation?.title || 'claude-context';
+        const title = conversation?.originalTitle || conversation?.title || 'claude-context';
         a.href = url;
         a.download = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_handoff.txt`;
         a.click();
         URL.revokeObjectURL(url);
-        showToast('⬇️ Context downloaded!');
+        showToast('\u2b07\ufe0f Context downloaded!');
     }
 
     async function handleSwitch(toId, autoSaveContext) {
@@ -415,9 +669,14 @@
             if (!proceed) return;
         }
 
-        // Save context first
-        if (autoSaveContext || settings.autoSaveContext) {
-            const saveRes = await handleSaveContext(true);
+        // Bridge + optional save
+        if (lastSavedConversation?.threadId) {
+            // User already saved manually this session — just write the bridge, no duplicate save
+            await saveHandoffBridge(lastSavedConversation.threadId, lastSavedConversation.originalTitle, lastSavedConversation.chatId);
+        } else if (autoSaveContext) {
+            // Only auto-save when user explicitly clicks "Switch + Save Context" (autoSaveContext=true)
+            // Plain "Switch" never auto-saves — user must click Save Context manually first
+            const saveRes = await handleSaveContext(true, true);
             if (saveRes === null) return; // User cancelled manual editor
         }
 

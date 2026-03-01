@@ -166,7 +166,7 @@ document.getElementById('btn-delete-acc').addEventListener('click', async () => 
 const DEFAULT_TEMPLATE = `## Continuing a Previous Session\n\nI've reached my usage limit on another account and I'm continuing our conversation here. Please read the context below, acknowledge it briefly, and continue where we left off.\n\n### Conversation Topic\n{title}\n\n### Context\n{context}\n\n### Most Recent Exchange\n{recent}\n\n### Immediate Next Step\n{nextStep}\n\n---\nPlease confirm you have the context and we'll continue.`;
 
 async function loadContextSettings() {
-    // ── Context history ──────────────────────────────────
+    // ── Context history (grouped) ─────────────────────────
     const { history } = await msg({ type: 'GET_CONTEXT_HISTORY' });
     const listEl = document.getElementById('ctx-history-list');
     const emptyEl = document.getElementById('ctx-history-empty');
@@ -176,41 +176,83 @@ async function loadContextSettings() {
         emptyEl.classList.remove('hidden');
     } else {
         emptyEl.classList.add('hidden');
-        history.forEach((entry) => {
-            const date = entry.savedAt ? new Date(entry.savedAt).toLocaleString() : '';
+
+        history.forEach((group) => {
             const card = document.createElement('div');
             card.className = 'card ctx-history-entry';
-            card.style.cssText = 'margin-bottom:14px;';
+            card.style.cssText = 'margin-bottom:16px;';
+
+            const saveRows = (group.saves || []).map((s) => `
+              <tr>
+                <td style="font-size:12px;color:var(--text2)">${esc(s.accountLabel || 'Account')}</td>
+                <td style="font-size:11px;color:var(--text3)">${formatDate(s.savedAt)}</td>
+                <td>
+                  <button class="table-btn ctx-copy-save-btn" data-prompt="${encodeURIComponent(s.prompt || '')}" style="margin-right:4px">📋 Copy</button>
+                  <button class="table-btn table-btn-danger ctx-del-save-btn" data-save-id="${esc(s.id)}" data-group-id="${esc(group.id)}">✕</button>
+                </td>
+              </tr>
+            `).join('');
+
             card.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-          <div>
-            <div style="font-weight:700;font-size:13.5px;color:var(--text)">${esc(entry.title)}</div>
-            <div style="font-size:11px;color:var(--text3);margin-top:2px">${date}</div>
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-primary ctx-copy-btn" style="padding:6px 14px;font-size:12px" data-id="${entry.id}" data-prompt="${encodeURIComponent(entry.prompt)}">📋 Copy</button>
-            <button class="table-btn table-btn-danger ctx-del-btn" data-id="${entry.id}">✕ Delete</button>
-          </div>
-        </div>
-        <textarea rows="5" readonly style="font-family:monospace;font-size:11.5px;opacity:0.75;width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px;resize:vertical">${esc(entry.prompt)}</textarea>
-        <div class="success-msg ctx-copy-ok hidden" style="margin-top:8px">✅ Copied!</div>
-      `;
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:12px">
+                <div>
+                  <div style="font-weight:700;font-size:14px;color:var(--text)">${esc(group.title)}</div>
+                  <div style="font-size:11px;color:var(--text3);margin-top:2px">${(group.saves || []).length} session${(group.saves || []).length !== 1 ? 's' : ''} · last saved ${formatDate(group.savedAt)}</div>
+                </div>
+                <div style="display:flex;gap:6px;flex-shrink:0">
+                  <button class="btn btn-primary ctx-copy-all-btn" style="padding:6px 12px;font-size:12px" data-group-id="${esc(group.id)}">📋 Copy All</button>
+                  <button class="table-btn table-btn-danger ctx-del-group-btn" data-group-id="${esc(group.id)}">🗑️ Delete</button>
+                </div>
+              </div>
+              <table class="data-table" style="margin-bottom:8px">
+                <thead><tr><th>Account</th><th>Saved</th><th>Actions</th></tr></thead>
+                <tbody>${saveRows}</tbody>
+              </table>
+              <div class="success-msg ctx-copy-ok hidden" style="margin-top:4px">✅ Copied!</div>
+            `;
             listEl.appendChild(card);
         });
 
-        listEl.querySelectorAll('.ctx-copy-btn').forEach((btn) => {
+        // Store for copy-all handler
+        window.__CSM_optionsHistory = history;
+
+        listEl.querySelectorAll('.ctx-copy-all-btn').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const groupId = btn.dataset.groupId;
+                const group = (window.__CSM_optionsHistory || []).find(g => g.id === groupId);
+                if (!group) return;
+                const prompt = buildConsolidatedPromptOptions(group);
+                await navigator.clipboard.writeText(prompt);
+                const ok = btn.closest('.ctx-history-entry').querySelector('.ctx-copy-ok');
+                ok.textContent = '✅ Consolidated prompt copied!';
+                ok.classList.remove('hidden');
+                setTimeout(() => ok.classList.add('hidden'), 2500);
+            });
+        });
+
+        listEl.querySelectorAll('.ctx-copy-save-btn').forEach((btn) => {
             btn.addEventListener('click', async () => {
                 const prompt = decodeURIComponent(btn.dataset.prompt);
                 await navigator.clipboard.writeText(prompt);
                 const ok = btn.closest('.ctx-history-entry').querySelector('.ctx-copy-ok');
+                ok.textContent = '✅ Session prompt copied!';
                 ok.classList.remove('hidden');
                 setTimeout(() => ok.classList.add('hidden'), 2000);
             });
         });
 
-        listEl.querySelectorAll('.ctx-del-btn').forEach((btn) => {
+        listEl.querySelectorAll('.ctx-del-save-btn').forEach((btn) => {
             btn.addEventListener('click', async () => {
-                await msg({ type: 'DELETE_CONTEXT', id: btn.dataset.id });
+                if (!confirm('Delete this session from the thread?')) return;
+                await msg({ type: 'DELETE_CONTEXT', saveId: btn.dataset.saveId });
+                loadContextSettings();
+            });
+        });
+
+        listEl.querySelectorAll('.ctx-del-group-btn').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                if (!confirm('Delete entire thread history? This cannot be undone.')) return;
+                await msg({ type: 'DELETE_CONTEXT', groupId: btn.dataset.groupId });
                 loadContextSettings();
             });
         });
@@ -223,6 +265,41 @@ async function loadContextSettings() {
     document.getElementById('ctx-last-n').value = settings.lastNMessages || 6;
     document.getElementById('ctx-template').value = settings.handoffTemplate || '';
 }
+
+function extractSessionContentOpts(prompt, fullContent) {
+    if (!prompt) return '';
+    if (fullContent) {
+        // ### Context already contains summary bullets + Recent messages verbatim.
+        // Stop before ### Most Recent Exchange to avoid duplicating.
+        const contextMatch = prompt.match(/### Context\n([\s\S]*?)(?=\n### Most Recent Exchange|\n### Immediate|\n---\n|\[CSM-Thread-ID|$)/);
+        if (contextMatch) return contextMatch[1].trim();
+        return prompt
+            .replace(/^## Continuing a Previous Session[\s\S]*?### Context\n/, '### Context\n')
+            .replace(/### Most Recent Exchange[\s\S]*$/, '')
+            .replace(/\[CSM-Thread-ID:[^\]]*\]\s*$/, '')
+            .replace(/---\nPlease confirm[\s\S]*$/, '')
+            .trim();
+    } else {
+        const match = prompt.match(/### Context\n([\s\S]*?)(?=\n### Most Recent Exchange|\n---\n|$)/);
+        return match ? match[1].trim() : prompt.slice(0, 800) + '…';
+    }
+}
+
+function buildConsolidatedPromptOptions(group) {
+    const sessions = group.saves || [];
+    if (!sessions.length) return '';
+    const sessionSections = sessions.map((s, i) => {
+        const isLast = i === sessions.length - 1;
+        const label = `Session ${i + 1} — ${s.accountLabel} (${formatDate(s.savedAt)})`;
+        const content = extractSessionContentOpts(s.prompt, isLast);
+        return isLast
+            ? `### ${label} ← MOST RECENT\n${content}`
+            : `### ${label}\n${content}`;
+    }).join('\n\n---\n\n');
+    return `## Continuing a Previous Session (${sessions.length} sessions)\n\nI've reached my usage limit on another account and I'm continuing our conversation here. Please read the full context below, acknowledge it briefly, and continue where we left off.\n\n### Conversation Thread\n${group.title}\n\n${sessionSections}`;
+}
+
+
 
 document.getElementById('btn-clear-ctx-history')?.addEventListener('click', async () => {
     if (!confirm('Clear all saved context history? This cannot be undone.')) return;
