@@ -104,6 +104,21 @@
             </div>
             <div id="ctx-history-list"></div>
 
+            <!-- Edit Context form (inline) -->
+            <div id="context-edit-wrap" class="card hidden">
+                <h2 class="card-title">Edit Session Context</h2>
+                <div class="form-grid" style="display:block;">
+                    <div class="form-field">
+                        <textarea id="ctx-edit-textarea" rows="18" style="font-family: 'Courier New', monospace;"></textarea>
+                    </div>
+                </div>
+                <div class="form-actions" style="margin-top:10px;">
+                    <button class="btn btn-primary" id="btn-save-ctx-edit">💾 Save Changes</button>
+                    <button class="btn btn-outline" id="btn-copy-ctx-edit">📋 Copy</button>
+                    <button class="btn btn-outline" id="btn-cancel-ctx-edit">Cancel</button>
+                </div>
+            </div>
+
             <!-- Settings card -->
             <div class="card" style="margin-top:28px">
                 <h2 class="card-title" style="margin-bottom:18px">⚙️ Context Settings</h2>

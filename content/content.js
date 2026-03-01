@@ -210,6 +210,7 @@
           <div class="csm-history-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(group.id)}">
             <span class="csm-history-save-label">${escHtml(s.accountLabel || 'Account')} · ${formatRelTime(s.savedAt)}</span>
             <div class="csm-history-save-actions">
+              <button class="csm-hist-btn" data-action="edit-save" data-save-id="${escHtml(s.id)}" title="Edit this session's prompt before copying">Edit</button>
               <button class="csm-hist-btn" data-action="copy-save" data-save-id="${escHtml(s.id)}" title="Copy this session's prompt">Copy</button>
               <button class="csm-hist-btn csm-hist-btn-del" data-action="del-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(group.id)}" title="Delete this session">✕</button>
             </div>
@@ -281,6 +282,21 @@
                     if (save?.prompt) {
                         await navigator.clipboard.writeText(save.prompt);
                         showToast('📋 Session prompt copied!');
+                    }
+                } else if (action === 'edit-save') {
+                    const group = allHistory.find(g => g.saves?.some(s => s.id === saveId));
+                    const save = group?.saves?.find(s => s.id === saveId);
+                    if (save?.prompt) {
+                        widgetOpen = false;
+                        document.getElementById('csm-panel')?.classList.add('csm-hidden');
+                        const res = await showEditSaveModal(save.prompt);
+                        if (res.action === 'copy') {
+                            await navigator.clipboard.writeText(res.prompt);
+                            showToast('📋 Edited prompt copied to clipboard!');
+                        } else if (res.action === 'save') {
+                            await chrome.runtime.sendMessage({ type: 'UPDATE_CONTEXT_PROMPT', saveId, prompt: res.prompt });
+                            showToast('💾 Changes saved!');
+                        }
                     }
                 } else if (action === 'del-save') {
                     if (!confirm('Delete this session from the thread?')) return;
@@ -578,6 +594,52 @@
             modal.querySelector('#csm-editor-save').addEventListener('click', () => {
                 modal.remove();
                 resolve({ conversation, prompt: textarea.value, cancelled: false });
+            });
+
+            textarea.focus();
+        });
+    }
+
+    function showEditSaveModal(initialText) {
+        return new Promise((resolve) => {
+            const existing = document.getElementById('csm-editor-modal');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'csm-editor-modal';
+            modal.className = 'csm-modal-overlay';
+            modal.innerHTML = `
+        <div class="csm-modal csm-modal-large">
+          <div class="csm-modal-title">Edit Session Context</div>
+          <div class="csm-modal-body" style="text-align:left;margin-bottom:12px;font-size:12px;">
+            Clean up this session's prompt text before copying it or saving it permanently.
+          </div>
+          <textarea id="csm-editor-textarea" spellcheck="false"></textarea>
+          <div class="csm-modal-actions" style="margin-top:16px;">
+            <button class="csm-btn csm-btn-primary" id="csm-editor-copy">📋 Copy</button>
+            <button class="csm-btn csm-btn-secondary" id="csm-editor-save" style="flex:1.5;">💾 Save Changes</button>
+            <button class="csm-btn csm-btn-secondary" id="csm-editor-cancel">Cancel</button>
+          </div>
+        </div>
+      `;
+            document.body.appendChild(modal);
+
+            const textarea = modal.querySelector('#csm-editor-textarea');
+            textarea.value = initialText || '';
+
+            const close = () => {
+                modal.remove();
+                resolve({ cancelled: true });
+            };
+
+            modal.querySelector('#csm-editor-cancel').addEventListener('click', close);
+            modal.querySelector('#csm-editor-copy').addEventListener('click', () => {
+                modal.remove();
+                resolve({ prompt: textarea.value, action: 'copy' });
+            });
+            modal.querySelector('#csm-editor-save').addEventListener('click', () => {
+                modal.remove();
+                resolve({ prompt: textarea.value, action: 'save' });
             });
 
             textarea.focus();

@@ -583,6 +583,25 @@ async function handleMessage(message, sender) {
             return { success: true };
         }
 
+        case 'UPDATE_CONTEXT_PROMPT': {
+            const { saveId, prompt } = message;
+            const { contextHistory } = await storageGet(['contextHistory']);
+            let history = contextHistory || [];
+
+            history = history.map(g => ({
+                ...g,
+                saves: g.saves.map(s => s.id === saveId ? { ...s, prompt } : s)
+            }));
+
+            await storageSet({ contextHistory: history });
+
+            const { pendingHandoff } = await storageGet(['pendingHandoff']);
+            if (pendingHandoff && pendingHandoff.id === saveId) {
+                await storageSet({ pendingHandoff: { ...pendingHandoff, prompt } });
+            }
+            return { success: true };
+        }
+
         case 'GET_SETTINGS': {
             const settings = await getSettings();
             return { settings };

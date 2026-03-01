@@ -187,6 +187,7 @@ async function loadContextSettings() {
                 <td style="font-size:12px;color:var(--text2)">${esc(s.accountLabel || 'Account')}</td>
                 <td style="font-size:11px;color:var(--text3)">${formatDate(s.savedAt)}</td>
                 <td>
+                  <button class="table-btn ctx-edit-save-btn" data-save-id="${esc(s.id)}" data-prompt="${encodeURIComponent(s.prompt || '')}" style="margin-right:4px">✏️ Edit</button>
                   <button class="table-btn ctx-copy-save-btn" data-prompt="${encodeURIComponent(s.prompt || '')}" style="margin-right:4px">📋 Copy</button>
                   <button class="table-btn table-btn-danger ctx-del-save-btn" data-save-id="${esc(s.id)}" data-group-id="${esc(group.id)}">✕</button>
                 </td>
@@ -227,6 +228,18 @@ async function loadContextSettings() {
                 ok.textContent = '✅ Consolidated prompt copied!';
                 ok.classList.remove('hidden');
                 setTimeout(() => ok.classList.add('hidden'), 2500);
+            });
+        });
+
+        listEl.querySelectorAll('.ctx-edit-save-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const saveId = btn.dataset.saveId;
+                const prompt = decodeURIComponent(btn.dataset.prompt);
+                window.__CSM_editingContextSaveId = saveId;
+                document.getElementById('ctx-edit-textarea').value = prompt;
+                document.getElementById('context-edit-wrap').classList.remove('hidden');
+                document.getElementById('ctx-history-list').style.display = 'none';
+                document.getElementById('ctx-edit-textarea').focus();
             });
         });
 
@@ -305,6 +318,30 @@ document.getElementById('btn-clear-ctx-history')?.addEventListener('click', asyn
     if (!confirm('Clear all saved context history? This cannot be undone.')) return;
     await msg({ type: 'CLEAR_CONTEXT_HISTORY' });
     loadContextSettings();
+});
+
+document.getElementById('btn-cancel-ctx-edit')?.addEventListener('click', () => {
+    document.getElementById('context-edit-wrap').classList.add('hidden');
+    document.getElementById('ctx-history-list').style.display = '';
+    window.__CSM_editingContextSaveId = null;
+});
+
+document.getElementById('btn-copy-ctx-edit')?.addEventListener('click', async () => {
+    const prompt = document.getElementById('ctx-edit-textarea').value;
+    await navigator.clipboard.writeText(prompt);
+    showMsg('ctx-saved', 'success');
+});
+
+document.getElementById('btn-save-ctx-edit')?.addEventListener('click', async () => {
+    const prompt = document.getElementById('ctx-edit-textarea').value;
+    if (window.__CSM_editingContextSaveId) {
+        await msg({ type: 'UPDATE_CONTEXT_PROMPT', saveId: window.__CSM_editingContextSaveId, prompt });
+    }
+    document.getElementById('context-edit-wrap').classList.add('hidden');
+    document.getElementById('ctx-history-list').style.display = '';
+    window.__CSM_editingContextSaveId = null;
+    loadContextSettings();
+    showMsg('ctx-saved', 'success');
 });
 
 document.getElementById('btn-save-context-settings').addEventListener('click', async () => {
