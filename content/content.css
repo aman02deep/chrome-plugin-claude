@@ -822,6 +822,18 @@
   margin-bottom: 3px;
 }
 
+.csm-picker-metrics {
+  color: rgba(129, 140, 248, 0.85);
+  /* subtle indigo to distinguish tokens */
+  font-weight: 500;
+}
+
+.csm-picker-metrics.sub-metrics {
+  color: rgba(255, 255, 255, 0.3);
+  /* slightly dimmer for sub-saves */
+  font-weight: 400;
+}
+
 .csm-picker-group-preview {
   font-size: 11.5px;
   color: rgba(255, 255, 255, 0.4);

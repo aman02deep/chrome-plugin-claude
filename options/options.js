@@ -33,10 +33,48 @@ function esc(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function formatDate(isoStr) {
-    if (!isoStr) return '—';
-    const d = new Date(isoStr);
-    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+    });
+}
+
+// --- Token & Size Estimation ---
+function estimatePromptMetrics(text) {
+    if (!text) return { bytes: 0, tokens: 0, sizeStr: '0 KB', tokenStr: '0 tokens' };
+
+    // Exact byte size using Blob
+    const bytes = new Blob([text]).size;
+
+    // Heuristic: ~4 chars per token for English/Code
+    const tokens = Math.ceil(text.length / 4);
+
+    return {
+        bytes,
+        tokens,
+        sizeStr: formatBytes(bytes),
+        tokenStr: formatTokens(tokens)
+    };
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    // Use 1 decimal place max for KB/MB
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function formatTokens(tokens) {
+    if (tokens < 1000) return `${tokens} tokens`;
+    // Format thousands (e.g., 4200 -> 4.2k)
+    return `${(tokens / 1000).toFixed(1)}k tokens`;
 }
 
 function showMsg(id, type) {
@@ -182,23 +220,30 @@ async function loadContextSettings() {
             card.className = 'card ctx-history-entry';
             card.style.cssText = 'margin-bottom:16px;';
 
-            const saveRows = (group.saves || []).map((s) => `
+            // Calculate consolidated metrics for the whole group
+            const consolidatedPrompt = buildConsolidatedPromptOptions(group);
+            const groupMetrics = estimatePromptMetrics(consolidatedPrompt);
+
+            const saveRows = (group.saves || []).map((s) => {
+                const saveMetrics = estimatePromptMetrics(s.prompt);
+                return `
               <tr>
                 <td style="font-size:12px;color:var(--text2)">${esc(s.accountLabel || 'Account')}</td>
                 <td style="font-size:11px;color:var(--text3)">${formatDate(s.savedAt)}</td>
+                <td style="font-size:11px;color:var(--primary);font-weight:500;">~${saveMetrics.tokenStr} <span style="color:var(--text3);font-weight:400">(${saveMetrics.sizeStr})</span></td>
                 <td>
                   <button class="table-btn ctx-edit-save-btn" data-save-id="${esc(s.id)}" data-prompt="${encodeURIComponent(s.prompt || '')}" style="margin-right:4px">✏️ Edit</button>
                   <button class="table-btn ctx-copy-save-btn" data-prompt="${encodeURIComponent(s.prompt || '')}" style="margin-right:4px">📋 Copy</button>
                   <button class="table-btn table-btn-danger ctx-del-save-btn" data-save-id="${esc(s.id)}" data-group-id="${esc(group.id)}">✕</button>
                 </td>
               </tr>
-            `).join('');
+            `}).join('');
 
             card.innerHTML = `
               <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:12px">
                 <div>
                   <div style="font-weight:700;font-size:14px;color:var(--text)">${esc(group.title)}</div>
-                  <div style="font-size:11px;color:var(--text3);margin-top:2px">${(group.saves || []).length} session${(group.saves || []).length !== 1 ? 's' : ''} · last saved ${formatDate(group.savedAt)}</div>
+                  <div style="font-size:11px;color:var(--text3);margin-top:2px">${(group.saves || []).length} session${(group.saves || []).length !== 1 ? 's' : ''} · last saved ${formatDate(group.savedAt)} <span style="color:var(--primary)">· ~${groupMetrics.tokenStr} (${groupMetrics.sizeStr})</span></div>
                 </div>
                 <div style="display:flex;gap:6px;flex-shrink:0">
                   <button class="table-btn ctx-rename-group-btn" data-group-id="${esc(group.id)}" data-group-title="${esc(group.title)}">✏️ Rename</button>
@@ -207,7 +252,7 @@ async function loadContextSettings() {
                 </div>
               </div>
               <table class="data-table" style="margin-bottom:8px">
-                <thead><tr><th>Account</th><th>Saved</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Account</th><th>Saved</th><th>Est. Size</th><th>Actions</th></tr></thead>
                 <tbody>${saveRows}</tbody>
               </table>
               <div class="success-msg ctx-copy-ok hidden" style="margin-top:4px">✅ Copied!</div>

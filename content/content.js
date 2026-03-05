@@ -238,6 +238,39 @@
         return `${Math.floor(hr / 24)}d ago`;
     }
 
+    // --- Token & Size Estimation ---
+    function estimatePromptMetrics(text) {
+        if (!text) return { bytes: 0, tokens: 0, sizeStr: '0 KB', tokenStr: '0 tokens' };
+
+        // Exact byte size using Blob
+        const bytes = new Blob([text]).size;
+
+        // Heuristic: ~4 chars per token for English/Code
+        const tokens = Math.ceil(text.length / 4);
+
+        return {
+            bytes,
+            tokens,
+            sizeStr: formatBytes(bytes),
+            tokenStr: formatTokens(tokens)
+        };
+    }
+
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        // Use 1 decimal place max for KB/MB
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatTokens(tokens) {
+        if (tokens < 1000) return `${tokens} tokens`;
+        // Format thousands (e.g., 4200 -> 4.2k)
+        return `${(tokens / 1000).toFixed(1)}k tokens`;
+    }
+
     async function loadHistoryIntoPanel() {
         const listEl = document.getElementById('csm-history-list');
         const countEl = document.getElementById('csm-history-count');
@@ -811,12 +844,16 @@
             const lastSavePrompt = g.saves?.[g.saves.length - 1]?.prompt || '';
             const previewText = lastSavePrompt.substring(0, 150).replace(/\n/g, ' ') + (lastSavePrompt.length > 150 ? '…' : '');
 
+            // Calculate consolidated metrics for the whole group
+            const consolidatedPrompt = buildConsolidatedPrompt(g);
+            const metrics = estimatePromptMetrics(consolidatedPrompt);
+
             return `
             <div class="csm-picker-group-row" data-group-id="${escHtml(g.id)}">
               <div class="csm-picker-radio"></div>
               <div class="csm-picker-group-info">
                 <div class="csm-picker-group-name" title="${escHtml(g.title)}">${escHtml(g.title)}</div>
-                <div class="csm-picker-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${formatRelTime(g.savedAt)}</div>
+                <div class="csm-picker-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${formatRelTime(g.savedAt)} <span class="csm-picker-metrics">· ~${metrics.tokenStr} (${metrics.sizeStr})</span></div>
                 ${previewText ? `<div class="csm-picker-group-preview">${escHtml(previewText)}</div>` : ''}
               </div>
             </div>`;
@@ -834,22 +871,31 @@
             const lastSavePrompt = g.saves?.[g.saves.length - 1]?.prompt || '';
             const previewText = lastSavePrompt.substring(0, 150).replace(/\n/g, ' ') + (lastSavePrompt.length > 150 ? '…' : '');
 
-            const subRows = (g.saves || []).map(s => `
+            // Calculate consolidated metrics for the whole group
+            const consolidatedPrompt = buildConsolidatedPrompt(g);
+            const groupMetrics = estimatePromptMetrics(consolidatedPrompt);
+
+            const subRows = (g.saves || []).map(s => {
+                // Calculate metrics for this specific save
+                const saveMetrics = estimatePromptMetrics(s.prompt);
+
+                return `
               <div class="csm-picker-save-row">
-                <span class="csm-picker-save-label">${escHtml(s.accountLabel || 'Account')} · ${formatRelTime(s.savedAt)}</span>
+                <span class="csm-picker-save-label">${escHtml(s.accountLabel || 'Account')} · ${formatRelTime(s.savedAt)} <span class="csm-picker-metrics sub-metrics">· ~${saveMetrics.tokenStr}</span></span>
                 <div class="csm-picker-save-actions">
                   <button class="csm-hist-btn" data-action="copy-save" data-save-id="${escHtml(s.id)}">Copy</button>
                   <button class="csm-hist-btn" data-action="move-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(g.id)}" title="Move to another thread">Move</button>
                   <button class="csm-hist-btn csm-hist-btn-del" data-action="del-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(g.id)}">✕</button>
                 </div>
-              </div>`).join('');
+              </div>`;
+            }).join('');
 
             return `
             <div class="csm-picker-group-row" style="cursor:default;flex-direction:column;align-items:stretch;gap:0">
               <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
                 <div class="csm-picker-group-info">
                   <div class="csm-picker-group-name" title="${escHtml(g.title)}">${escHtml(g.title)}</div>
-                  <div class="csm-picker-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${formatRelTime(g.savedAt)}</div>
+                  <div class="csm-picker-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${formatRelTime(g.savedAt)} <span class="csm-picker-metrics">· ~${groupMetrics.tokenStr} (${groupMetrics.sizeStr})</span></div>
                   ${previewText ? `<div class="csm-picker-group-preview">${escHtml(previewText)}</div>` : ''}
                 </div>
                 <div style="display:flex;gap:4px;flex-shrink:0">
