@@ -10,9 +10,9 @@
  *   'manual'     — returns raw conversation text for user editing
  */
 
-const DEFAULT_TEMPLATE = `## Continuing a Previous Session
+const DEFAULT_TEMPLATE = `## Conversation Thread
 
-I've reached my usage limit on another account and I'm continuing our conversation here. Please read the context below, acknowledge it briefly, and continue where we left off.
+Please read the context below, acknowledge it briefly, and continue where we left off.
 
 ### Conversation Topic
 {title}
@@ -49,7 +49,7 @@ export function buildHandoffPrompt(conversation, options = {}) {
     const { title, messages, extractedAt } = conversation;
 
     if (!messages || messages.length === 0) {
-        return `## Continuing a Previous Session\n\nNo conversation content could be extracted. Topic: ${title || 'Unknown'}\n\nExtracted at: ${extractedAt}`;
+        return `## Conversation Thread\n\nNo conversation content could be extracted. Topic: ${title || 'Unknown'}\n\nExtracted at: ${extractedAt}`;
     }
 
     if (mode === 'manual') {

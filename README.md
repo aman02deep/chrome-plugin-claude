@@ -21,7 +21,7 @@ A powerful, privacy-first Chrome Extension for managing multiple Claude.ai accou
 - **📋 Copy Consolidated Prompt**: One click merges all saves for a thread into a single, clean handoff prompt that Claude can read from start to finish.
 - **⚠️ Rate Limit Detection**: Automatically detects when you hit Claude's rate limit and prompts you to switch accounts.
 - **⚙️ Dynamic Selectors**: Claude updates their UI? No problem. Update the DOM selectors directly in the Options page so context extraction never breaks.
-- **🔐 Auto-Lock**: The extension automatically locks its in-memory encryption key after a period of inactivity (default 30 mins) to protect your sessions.
+- **🔐 Auto-Lock & Persistence**: The extension automatically locks its in-memory encryption key after a configurable period of inactivity to protect your sessions. You can also **Disable Auto-Lock entirely** to keep the extension unlocked across browser sessions securely.
 
 ---
 
@@ -98,8 +98,8 @@ Thread: "Dutch A2 writing exam preparation"
                                [📋 Copy All] [🗑️ Delete]
 ```
 
-- **Copy** on any row → copies that single session's prompt.
-- **📋 Copy All** → builds a consolidated prompt merging all sessions in order. Earlier sessions are summarised; the latest session is included verbatim. This is the prompt you paste into Claude.
+- **Copy** on any row → copies that single session's prompt verbatim (exactly as it was written).
+- **📋 Copy All** → builds a consolidated prompt merging all sessions in order. Earlier sessions are automatically summarized to save tokens; only the most recent session is included verbatim. This is the prompt you paste into Claude when switching accounts.
 
 **The bridge mechanism:**
 
@@ -174,7 +174,7 @@ graph TD
 - **Encryption**: Uses standard Web Crypto APIs (`AES-GCM` and `PBKDF2`).
   - Master Password -> Salted and Hashed -> Stored to verify login.
   - Master Password -> Decrypts the actual AES key -> Held *only in memory* while unlocked.
-  - If the service worker goes to sleep or you close the browser, the key is wiped and the extension locks.
+  - If the service worker goes to sleep, the key is wiped and the extension locks (unless **Disable Auto-Lock** is checked, in which case the key is securely serialized to `chrome.storage.session` which survives service worker sleep but is destroyed immediately upon browser close).
 - **No APIs**: The extension does not make any external API calls. Context extraction is done strictly via client-side DOM parsing (`context-extractor.js`).
 
 ---

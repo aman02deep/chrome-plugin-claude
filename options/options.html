@@ -109,7 +109,8 @@
                 <h2 class="card-title">Edit Session Context</h2>
                 <div class="form-grid" style="display:block;">
                     <div class="form-field">
-                        <textarea id="ctx-edit-textarea" rows="18" style="font-family: 'Courier New', monospace;"></textarea>
+                        <textarea id="ctx-edit-textarea" rows="18"
+                            style="font-family: 'Courier New', monospace;"></textarea>
                     </div>
                 </div>
                 <div class="form-actions" style="margin-top:10px;">
@@ -123,11 +124,11 @@
             <div class="card" style="margin-top:28px">
                 <h2 class="card-title" style="margin-bottom:18px">⚙️ Context Settings</h2>
                 <div class="form-field">
-                    <label>Context mode</label>
+                    <label>Copy session format</label>
                     <select id="ctx-mode">
-                        <option value="structured">Structured (default — last N messages verbatim + earlier compressed)
+                        <option value="full">Full transcript (default — all messages verbatim)
                         </option>
-                        <option value="full">Full transcript</option>
+                        <option value="structured">Structured (last N messages verbatim + earlier compressed)</option>
                         <option value="manual">Manual (opens editor before switch)</option>
                     </select>
                 </div>
@@ -219,6 +220,13 @@
             <div class="card">
                 <h2 class="card-title">Auto-lock</h2>
                 <div class="form-field">
+                    <label
+                        style="display:flex;align-items:center;cursor:pointer;gap:8px;font-weight:normal;margin-bottom:12px;">
+                        <input type="checkbox" id="sec-disable-lock" />
+                        <span>Disable auto-lock entirely (keep unlocked until browser restarts)</span>
+                    </label>
+                </div>
+                <div class="form-field" id="wrap-lock-timeout">
                     <label>Lock after inactivity (minutes)</label>
                     <input type="number" id="sec-lock-timeout" min="1" max="480" style="width:80px" />
                 </div>

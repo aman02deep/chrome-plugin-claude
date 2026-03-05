@@ -22,7 +22,6 @@
     let handoffPromptText = null;
     let lastSwitchTime = 0;
     let pendingFromId = null;
-    let lastSavedConversation = null; // Tracks the most recently saved conversation for bridge writing on switch
 
     const SELECTORS_DEFAULT = {
         rateLimitBanner: '[data-testid="rate-limit-message"], .rate-limit, [class*="UsageLimitBanner"], [class*="rate-limit"]',
@@ -189,20 +188,17 @@
 
       <div class="csm-section">
         <div class="csm-section-label">CONTEXT</div>
-        <div class="csm-btn-row">
+        <div class="csm-btn-grid">
           <button class="csm-btn csm-btn-secondary" id="csm-save-ctx">💾 Save Context</button>
+          <button class="csm-btn csm-btn-secondary" id="csm-view-ctx">📋 Contexts</button>
           <button class="csm-btn csm-btn-secondary" id="csm-copy-handoff">📋 Copy Prompt</button>
           <button class="csm-btn csm-btn-secondary" id="csm-download">⬇️ Download .txt</button>
         </div>
       </div>
-
-      <div class="csm-section">
-        <div class="csm-section-label">CONTEXT HISTORY <span id="csm-history-count" style="opacity:0.5;font-weight:400;font-size:10px"></span></div>
-        <div id="csm-history-list"><div class="csm-empty">Loading…</div></div>
-      </div>
     `;
     }
 
+    // buildHistoryGroupHTML is now only used inside showGroupPickerOverlay (browse mode)
     function buildHistoryGroupHTML(group) {
         const relTime = formatRelTime(group.savedAt);
         const saveCount = group.saves?.length || 0;
@@ -279,8 +275,18 @@
                 } else if (action === 'copy-save') {
                     const group = allHistory.find(g => g.saves?.some(s => s.id === saveId));
                     const save = group?.saves?.find(s => s.id === saveId);
-                    if (save?.prompt) {
-                        await navigator.clipboard.writeText(save.prompt);
+
+                    if (save) {
+                        let promptText = save.prompt;
+                        // Dynamically build from raw conversation using the user's chosen mode.
+                        // Copy All (consolidated) always uses structured regardless of this setting.
+                        if (save.conversation) {
+                            const mode = settings.contextMode || 'full';
+                            const lastN = settings.lastNMessages || 6;
+                            const template = settings.handoffTemplate || null;
+                            promptText = buildHandoffPromptInline(save.conversation, { mode, lastNMessages: lastN, template, threadId: group.threadId || group.id });
+                        }
+                        await navigator.clipboard.writeText(promptText);
                         showToast('📋 Session prompt copied!');
                     }
                 } else if (action === 'edit-save') {
@@ -311,9 +317,23 @@
         });
     }
 
-    function extractSessionContent(prompt, fullContent) {
-        if (!prompt) return '';
-        if (fullContent) {
+    function extractSessionContent(saveData, isLast, groupThreadId) {
+        if (!saveData.prompt && !saveData.conversation) return '';
+
+        // If we stored the raw conversation, dynamically build the structured context NOW
+        if (saveData.conversation) {
+            const mode = settings.contextMode || 'full';
+            const lastN = settings.lastNMessages || 6;
+            const template = settings.handoffTemplate || null;
+            const rawPrompt = buildHandoffPromptInline(saveData.conversation, { mode, lastNMessages: lastN, template, threadId: groupThreadId });
+
+            // Extract just the context parts so it fits nicely in the consolidated wrapper
+            const contextMatch = rawPrompt.match(/### Context\n([\s\S]*?)(?=\n### Most Recent Exchange|\n### Immediate|\n---\n|\[CSM-Thread-ID|$)/);
+            return contextMatch ? contextMatch[1].trim() : rawPrompt;
+        }
+
+        const prompt = saveData.prompt;
+        if (isLast) {
             // ### Context already contains the summary bullets + Recent messages verbatim.
             // Stop before ### Most Recent Exchange to avoid duplicating that content.
             const contextMatch = prompt.match(/### Context\n([\s\S]*?)(?=\n### Most Recent Exchange|\n### Immediate|\n---\n|\[CSM-Thread-ID|$)/);
@@ -339,7 +359,7 @@
         const sessionSections = sessions.map((s, i) => {
             const isLast = i === sessions.length - 1;
             const label = `Session ${i + 1} \u2014 ${s.accountLabel} (${formatRelTime(s.savedAt)})`;
-            const content = extractSessionContent(s.prompt, isLast);
+            const content = extractSessionContent(s, isLast, group.threadId || group.id);
             return isLast
                 ? `### ${label} \u2190 MOST RECENT\n${content}`
                 : `### ${label}\n${content}`;
@@ -384,7 +404,6 @@
         if (widgetOpen) {
             loadState().then(() => {
                 refreshPanel();
-                loadHistoryIntoPanel();
             });
         }
     }
@@ -409,7 +428,12 @@
 
         panel.querySelector('#csm-save-ctx')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            handleSaveContext(false);
+            handleSaveContext();
+        });
+
+        panel.querySelector('#csm-view-ctx')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleViewContexts();
         });
 
         panel.querySelector('#csm-copy-handoff')?.addEventListener('click', (e) => {
@@ -421,7 +445,6 @@
             e.stopPropagation();
             handleDownload();
         });
-
     }
 
     // ─── Context extraction ───────────────────────────────────────────────────
@@ -432,91 +455,61 @@
         }
         const conversation = window.__CS_extractConversation();
 
-        // Associate the context with this specific chat UI to prevent duplicates
+        // Associate the context with this specific chat URL
         const match = window.location.pathname.match(/^\/chat\/([a-f0-9\-]+)/);
-        if (match && conversation) {
-            conversation.chatId = match[1];
-        }
+        if (match && conversation) conversation.chatId = match[1];
 
-        // Thread ID & Original Title come from storage (written by the previous account's save).
-        // We read synchronously from a cached copy held in memory (set at page load).
-        // See: loadHandoffBridge() called during init.
+        // Read bridge to suggest a pre-selected group (read-only — user picks explicitly)
         const bridge = window.__CSM_handoffBridge || {};
         const FOUR_HOURS = 4 * 60 * 60 * 1000;
-        const isBridgeValid = bridge.threadId &&
-            bridge.sourceChatId &&
-            bridge.savedAt &&
-            (Date.now() - bridge.savedAt) < FOUR_HOURS;
-        let threadId, originalTitle;
-
-        const chatId = conversation?.chatId;
-        // Bridge is usable if it's valid AND either:
-        //   (a) not yet consumed by any chat, OR
-        //   (b) already consumed by THIS specific chat (repeated saves on same chat)
-        const bridgeUsable = isBridgeValid &&
-            bridge.sourceChatId !== chatId &&
-            (!bridge.consumedByChatId || bridge.consumedByChatId === chatId);
-
-        if (bridgeUsable) {
-            // Inherit thread from previous account's context
-            threadId = bridge.threadId;
-            originalTitle = bridge.originalTitle;
-            // Mark bridge as consumed by this chat so OTHER chats don't inherit it
-            if (!bridge.consumedByChatId) {
-                const consumed = { ...bridge, consumedByChatId: chatId };
-                window.__CSM_handoffBridge = consumed;
-                chrome.storage.local.set({ __csmHandoffBridge: consumed });
-            }
-        } else {
-            // Different chat or no/stale bridge — fresh group anchored to this chatId
-            threadId = chatId || crypto.randomUUID();
-            originalTitle = (isBridgeValid ? bridge.originalTitle : null) || conversation?.title || 'Untitled';
-        }
+        const isBridgeValid = bridge.threadId && bridge.savedAt && (Date.now() - bridge.savedAt) < FOUR_HOURS;
 
         if (conversation) {
-            conversation.threadId = threadId;
-            conversation.originalTitle = originalTitle;
+            // Use bridge's original title if available, otherwise current chat title
+            conversation.originalTitle = (isBridgeValid ? bridge.originalTitle : null) || conversation.title || 'Untitled';
+            conversation.bridgeThreadId = isBridgeValid ? bridge.threadId : null;
 
             // Strip leftover boilerplate from previous handoff pastes
+            // We check for both the old "Continuing a Previous Session" and the new "Conversation Thread" headers
             conversation.messages = (conversation.messages || []).map((msg) => {
                 let content = msg.content;
-
-                if (msg.role === 'user' && content.includes('## Continuing a Previous Session')) {
+                if (msg.role === 'user' && (content.includes('## Conversation Thread') || content.includes('## Continuing a Previous Session'))) {
                     const summaryMatch = content.match(/\*\*Earlier conversation summary:\*\*\s*([\s\S]*?)\n\n\*\*Recent messages/);
                     const verbatimMatch = content.match(/\*\*Recent messages \(verbatim\):\*\*\s*([\s\S]*?)\n\n### Most Recent Exchange/);
-                    const manualMatch = content.match(/## Continuing a Previous Session[\s\S]*?### Context\n([\s\S]*?)\n\n### Most Recent Exchange/);
+                    const manualMatchNew = content.match(/## Conversation Thread[\s\S]*?### Context\n([\s\S]*?)\n\n### Most Recent Exchange/);
+                    const manualMatchOld = content.match(/## Continuing a Previous Session[\s\S]*?### Context\n([\s\S]*?)\n\n### Most Recent Exchange/);
 
                     if (summaryMatch || verbatimMatch) {
-                        content = (summaryMatch ? summaryMatch[1].trim() + '\n\n' : '') +
-                            (verbatimMatch ? verbatimMatch[1].trim() : '');
-                    } else if (manualMatch) {
-                        content = manualMatch[1].trim();
+                        content = (summaryMatch ? summaryMatch[1].trim() + '\n\n' : '') + (verbatimMatch ? verbatimMatch[1].trim() : '');
+                    } else if (manualMatchNew) {
+                        content = manualMatchNew[1].trim();
+                    } else if (manualMatchOld) {
+                        content = manualMatchOld[1].trim();
                     } else {
-                        content = content.replace(/## Continuing a Previous Session[\s\S]*?### Context\n/, '')
+                        content = content.replace(/## Conversation Thread[\s\S]*?### Context\n/, '')
+                            .replace(/## Continuing a Previous Session[\s\S]*?### Context\n/, '')
                             .replace(/### Most Recent Exchange[\s\S]*$/, '');
                     }
                 }
-
                 content = content.replace(/\[CSM-Thread-ID:.*?\]\s*$/m, '').trim();
                 content = content.replace(/^\*\*You:\*\*\s*/i, '');
                 content = content.replace(/^\*\*Claude:\*\*\s*/i, '');
-
                 return { ...msg, content };
             }).filter((msg) => msg.content.trim() !== '');
         }
 
-        const mode = settings.contextMode || 'structured';
+        const mode = settings.contextMode || 'full';
         const lastN = settings.lastNMessages || 6;
         const template = settings.handoffTemplate || null;
-        const prompt = buildHandoffPromptInline(conversation, { mode, lastNMessages: lastN, template, threadId });
+        // Build prompt with a placeholder threadId; the real threadId is set after user picks a group
+        const prompt = buildHandoffPromptInline(conversation, { mode, lastNMessages: lastN, template, threadId: conversation?.chatId || crypto.randomUUID() });
         return { conversation, prompt };
     }
 
-    // Inlined version of context-builder.js (content scripts can't import ES modules)
     function buildHandoffPromptInline(conversation, options) {
         const { mode = 'structured', lastNMessages = 6, template = null, threadId } = options;
         const { title, messages, originalTitle } = conversation;
-        const DEFAULT_TEMPLATE = `## Continuing a Previous Session\n\nI've reached my usage limit on another account and I'm continuing our conversation here. Please read the context below, acknowledge it briefly, and continue where we left off.\n\n### Conversation Topic\n{title}\n\n### Context\n{context}\n\n### Most Recent Exchange\n{recent}\n\n### Immediate Next Step\n{nextStep}\n\n---\nPlease confirm you have the context and we'll continue.`;
+        const DEFAULT_TEMPLATE = `## Conversation Thread\n\nPlease read the context below, acknowledge it briefly, and continue where we left off.\n\n### Conversation Topic\n{title}\n\n### Context\n{context}\n\n### Most Recent Exchange\n{recent}\n\n### Immediate Next Step\n{nextStep}\n\n---\nPlease confirm you have the context and we'll continue.`;
 
         const finalTitle = originalTitle || title || 'Untitled';
 
@@ -525,7 +518,7 @@
         };
 
         if (!messages || messages.length === 0) {
-            return attachThreadId(`## Continuing a Previous Session\n\nNo conversation content could be extracted. Topic: ${title || 'Unknown'}`);
+            return attachThreadId(`## Conversation Thread\n\nNo conversation content could be extracted. Topic: ${title || 'Unknown'}`);
         }
 
         const fmt = (msgs) => msgs.map((m) => `**${m.role === 'user' ? 'You' : 'Claude'}:** ${m.content.trim()}`).join('\n\n');
@@ -647,7 +640,7 @@
     }
 
     async function promptWithManualEditorIfNeeded() {
-        const mode = settings.contextMode || 'structured';
+        const mode = settings.contextMode || 'full';
         const { conversation, prompt } = extractAndBuildPrompt();
         if (mode === 'manual') {
             widgetOpen = false;
@@ -657,24 +650,395 @@
         return { conversation, prompt, cancelled: false };
     }
 
+    // ─── Group Picker Overlay ──────────────────────────────────────────────────
+
+    /**
+     * showGroupPickerOverlay(mode, extractedData)
+     *   mode: 'save' — shows group picker so user selects where to save
+     *   mode: 'browse' — shows all groups + sub-entries for copy/delete
+     *   extractedData: { conversation, prompt } — only used in 'save' mode
+     */
+    async function showGroupPickerOverlay(mode, extractedData) {
+        const existing = document.getElementById('csm-picker-overlay');
+        if (existing) existing.remove();
+
+        // Fetch current history
+        const resp = await chrome.runtime.sendMessage({ type: 'GET_CONTEXT_HISTORY' });
+        const history = resp.history || [];
+
+        const overlay = document.createElement('div');
+        overlay.id = 'csm-picker-overlay';
+        overlay.className = 'csm-picker-overlay';
+
+        const isSave = mode === 'save';
+        const conversation = extractedData?.conversation || null;
+        const promptText = extractedData?.prompt || null;
+
+        // Determine suggested group (from bridge)
+        const suggestedThreadId = conversation?.bridgeThreadId || null;
+
+        overlay.innerHTML = `
+          <div class="csm-picker-modal">
+            <div class="csm-picker-header">
+              <span style="font-size:20px">${isSave ? '💾' : '📋'}</span>
+              <span class="csm-picker-title">${isSave ? 'Save Context' : 'Saved Contexts'}</span>
+              <button class="csm-close" id="csm-picker-close">✕</button>
+            </div>
+            ${isSave ? `<div class="csm-picker-subtitle">Choose where to save this context, or create a new thread.</div>` : `<div class="csm-picker-subtitle">${history.length} thread${history.length !== 1 ? 's' : ''} saved</div>`}
+            <div class="csm-picker-list" id="csm-picker-list">
+              ${isSave ? buildPickerSaveMode(history, conversation, suggestedThreadId) : buildPickerBrowseMode(history)}
+            </div>
+            ${isSave ? `
+            <div class="csm-picker-actions">
+              <button class="csm-btn csm-btn-primary" id="csm-picker-save">💾 Save Here</button>
+              <button class="csm-btn csm-btn-secondary" id="csm-picker-cancel">Cancel</button>
+            </div>` : ''}
+          </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        // State for save mode
+        let selectedGroupId = null; // null = new thread
+        let isNewThread = true;
+
+        // If bridge suggests a group, pre-select it
+        if (isSave && suggestedThreadId) {
+            const match = history.find(g => g.threadId === suggestedThreadId);
+            if (match) {
+                selectedGroupId = match.id;
+                isNewThread = false;
+                overlay.querySelector(`[data-group-id="${match.id}"]`)?.classList.add('csm-picker-selected');
+                overlay.querySelector('.csm-picker-new-thread')?.classList.remove('csm-picker-selected');
+            } else {
+                // Bridge group not found — default to new thread
+                overlay.querySelector('.csm-picker-new-thread')?.classList.add('csm-picker-selected');
+            }
+        } else if (isSave) {
+            // Default: new thread selected
+            overlay.querySelector('.csm-picker-new-thread')?.classList.add('csm-picker-selected');
+        }
+
+        // ── Event wiring ──
+
+        overlay.querySelector('#csm-picker-close')?.addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        if (isSave) {
+            // New thread row click
+            const newRow = overlay.querySelector('.csm-picker-new-thread');
+            newRow?.addEventListener('click', (e) => {
+                if (e.target.tagName === 'INPUT') return; // Let input handle itself
+                setPickerSelection(overlay, null);
+                selectedGroupId = null;
+                isNewThread = true;
+                newRow.querySelector('.csm-picker-new-input')?.focus();
+            });
+
+            // Existing group row clicks
+            overlay.querySelectorAll('.csm-picker-group-row').forEach(row => {
+                row.addEventListener('click', () => {
+                    selectedGroupId = row.dataset.groupId;
+                    isNewThread = false;
+                    setPickerSelection(overlay, row.dataset.groupId);
+                });
+            });
+
+            // Save button
+            overlay.querySelector('#csm-picker-save')?.addEventListener('click', async () => {
+                const activeAccount = accounts.find(a => a.id === activeAccountId);
+                const accountLabel = activeAccount?.label || 'Unknown account';
+
+                let threadId, title;
+                if (isNewThread || !selectedGroupId) {
+                    const input = overlay.querySelector('.csm-picker-new-input');
+                    title = input?.value.trim() || conversation?.originalTitle || conversation?.title || 'Untitled';
+                    threadId = crypto.randomUUID();
+                } else {
+                    const group = history.find(g => g.id === selectedGroupId);
+                    threadId = group?.threadId || selectedGroupId;
+                    title = group?.title || 'Untitled';
+                }
+
+                // Rebuild prompt with the correct threadId
+                const finalPrompt = promptText
+                    ? promptText.replace(/\[CSM-Thread-ID:[^\]]*\]/, `[CSM-Thread-ID: ${threadId} | Original Title: ${title}]`)
+                    : promptText;
+
+                handoffPromptText = finalPrompt;
+
+                await chrome.runtime.sendMessage({
+                    type: 'SAVE_CONTEXT',
+                    conversation: { ...conversation, threadId, originalTitle: title },
+                    prompt: finalPrompt,
+                    accountLabel,
+                    explicitThreadId: threadId,
+                });
+
+                overlay.remove();
+                showToast('✅ Context saved!');
+            });
+
+            overlay.querySelector('#csm-picker-cancel')?.addEventListener('click', () => overlay.remove());
+        } else {
+            // Browse mode — wire copy/delete buttons
+            wireBrowseActions(overlay, history);
+        }
+    }
+
+    function setPickerSelection(overlay, groupId) {
+        overlay.querySelectorAll('.csm-picker-group-row').forEach(r => r.classList.remove('csm-picker-selected'));
+        overlay.querySelector('.csm-picker-new-thread')?.classList.remove('csm-picker-selected');
+        if (groupId === null) {
+            overlay.querySelector('.csm-picker-new-thread')?.classList.add('csm-picker-selected');
+        } else {
+            overlay.querySelector(`[data-group-id="${groupId}"]`)?.classList.add('csm-picker-selected');
+        }
+    }
+
+    function buildPickerSaveMode(history, conversation, suggestedThreadId) {
+        const chatTitle = conversation?.originalTitle || conversation?.title || 'Untitled';
+        const newThreadRow = `
+          <div class="csm-picker-new-thread">
+            <span class="csm-picker-new-icon">✨</span>
+            <input class="csm-picker-new-input" type="text" placeholder="New thread name…" value="${escHtml(chatTitle)}" maxlength="120" />
+          </div>`;
+
+        if (!history.length) return newThreadRow;
+
+        const groupRows = history.map(g => {
+            const saveCount = g.saves?.length || 0;
+            const lastSavePrompt = g.saves?.[g.saves.length - 1]?.prompt || '';
+            const previewText = lastSavePrompt.substring(0, 150).replace(/\n/g, ' ') + (lastSavePrompt.length > 150 ? '…' : '');
+
+            return `
+            <div class="csm-picker-group-row" data-group-id="${escHtml(g.id)}">
+              <div class="csm-picker-radio"></div>
+              <div class="csm-picker-group-info">
+                <div class="csm-picker-group-name" title="${escHtml(g.title)}">${escHtml(g.title)}</div>
+                <div class="csm-picker-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${formatRelTime(g.savedAt)}</div>
+                ${previewText ? `<div class="csm-picker-group-preview">${escHtml(previewText)}</div>` : ''}
+              </div>
+            </div>`;
+        }).join('');
+
+        return newThreadRow + groupRows;
+    }
+
+    function buildPickerBrowseMode(history) {
+        if (!history.length) {
+            return `<div class="csm-picker-empty"><div class="csm-picker-empty-icon">📭</div>No contexts saved yet.<br>Use "💾 Save Context" to save your first one.</div>`;
+        }
+        return history.map(g => {
+            const saveCount = g.saves?.length || 0;
+            const lastSavePrompt = g.saves?.[g.saves.length - 1]?.prompt || '';
+            const previewText = lastSavePrompt.substring(0, 150).replace(/\n/g, ' ') + (lastSavePrompt.length > 150 ? '…' : '');
+
+            const subRows = (g.saves || []).map(s => `
+              <div class="csm-picker-save-row">
+                <span class="csm-picker-save-label">${escHtml(s.accountLabel || 'Account')} · ${formatRelTime(s.savedAt)}</span>
+                <div class="csm-picker-save-actions">
+                  <button class="csm-hist-btn" data-action="copy-save" data-save-id="${escHtml(s.id)}">Copy</button>
+                  <button class="csm-hist-btn" data-action="move-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(g.id)}" title="Move to another thread">Move</button>
+                  <button class="csm-hist-btn csm-hist-btn-del" data-action="del-save" data-save-id="${escHtml(s.id)}" data-group-id="${escHtml(g.id)}">✕</button>
+                </div>
+              </div>`).join('');
+
+            return `
+            <div class="csm-picker-group-row" style="cursor:default;flex-direction:column;align-items:stretch;gap:0">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+                <div class="csm-picker-group-info">
+                  <div class="csm-picker-group-name" title="${escHtml(g.title)}">${escHtml(g.title)}</div>
+                  <div class="csm-picker-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${formatRelTime(g.savedAt)}</div>
+                  ${previewText ? `<div class="csm-picker-group-preview">${escHtml(previewText)}</div>` : ''}
+                </div>
+                <div style="display:flex;gap:4px;flex-shrink:0">
+                  <button class="csm-hist-btn" data-action="rename-group" data-group-id="${escHtml(g.id)}" data-group-title="${escHtml(g.title)}">✏️</button>
+                  <button class="csm-hist-btn csm-hist-btn-primary" data-action="copy-consolidated" data-group-id="${escHtml(g.id)}">📋 Copy All</button>
+                  <button class="csm-hist-btn csm-hist-btn-del" data-action="del-group" data-group-id="${escHtml(g.id)}">🗑️</button>
+                </div>
+              </div>
+              <div class="csm-picker-saves">${subRows}</div>
+            </div>`;
+        }).join('');
+    }
+
+    function wireBrowseActions(overlay, history) {
+        overlay.__pickerHistory = history;
+
+        overlay.querySelectorAll('[data-action]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.action;
+                const groupId = btn.dataset.groupId;
+                const saveId = btn.dataset.saveId;
+                const hist = overlay.__pickerHistory || [];
+
+                if (action === 'copy-consolidated') {
+                    const group = hist.find(g => g.id === groupId);
+                    if (group) {
+                        const prompt = buildConsolidatedPrompt(group);
+                        await navigator.clipboard.writeText(prompt);
+                        showToast('📋 Consolidated prompt copied!');
+                    }
+                } else if (action === 'copy-save') {
+                    const group = hist.find(g => g.saves?.some(s => s.id === saveId));
+                    const save = group?.saves?.find(s => s.id === saveId);
+                    if (save?.prompt) {
+                        await navigator.clipboard.writeText(save.prompt);
+                        showToast('📋 Session prompt copied!');
+                    }
+                } else if (action === 'move-save') {
+                    // Other groups (exclude the one the save currently belongs to)
+                    const otherGroups = hist.filter(g => g.id !== groupId);
+                    // Pass the option to create a new thread as well
+                    const target = await showMoveTargetPicker(otherGroups);
+                    if (!target) return; // user cancelled
+
+                    const payload = { type: 'MOVE_CONTEXT_SAVE', saveId };
+                    if (target.isNew) {
+                        payload.newThreadTitle = target.title;
+                        payload.newThreadId = crypto.randomUUID();
+                    } else {
+                        payload.targetGroupId = target.groupId;
+                    }
+
+                    const result = await chrome.runtime.sendMessage(payload);
+                    if (result.error) { showToast('❌ ' + result.error); return; }
+                    overlay.remove();
+                    showGroupPickerOverlay('browse');
+                    showToast('✅ Moved to thread!');
+                } else if (action === 'rename-group') {
+                    const currentTitle = btn.dataset.groupTitle;
+                    const newTitle = prompt('Enter a new name for this thread:', currentTitle);
+                    if (newTitle && newTitle.trim() !== currentTitle) {
+                        await chrome.runtime.sendMessage({ type: 'RENAME_CONTEXT_GROUP', groupId, newTitle: newTitle.trim() });
+                        overlay.remove();
+                        showGroupPickerOverlay('browse');
+                    }
+                } else if (action === 'del-save') {
+                    if (!confirm('Delete this session from the thread?')) return;
+                    await chrome.runtime.sendMessage({ type: 'DELETE_CONTEXT', saveId });
+                    overlay.remove();
+                    showGroupPickerOverlay('browse');
+                } else if (action === 'del-group') {
+                    if (!confirm('Delete entire thread history?')) return;
+                    await chrome.runtime.sendMessage({ type: 'DELETE_CONTEXT', groupId });
+                    overlay.remove();
+                    showGroupPickerOverlay('browse');
+                }
+            });
+        });
+    }
+
+    /**
+     * showMoveTargetPicker(groups) → Promise<{ isNew, groupId, title } | null>
+     */
+    function showMoveTargetPicker(groups) {
+        return new Promise((resolve) => {
+            const existing = document.getElementById('csm-move-picker');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'csm-move-picker';
+            modal.className = 'csm-picker-overlay';
+            modal.style.zIndex = '2147483645'; // above browse overlay
+
+            const newThreadRow = `
+              <div class="csm-picker-new-thread" style="margin-bottom:8px">
+                <span class="csm-picker-new-icon">✨</span>
+                <input class="csm-picker-new-input" type="text" placeholder="Create new thread…" maxlength="120" />
+              </div>`;
+
+            const groupRows = groups.map(g => {
+                const saveCount = g.saves?.length || 0;
+                const lastSavePrompt = g.saves?.[g.saves.length - 1]?.prompt || '';
+                const previewText = lastSavePrompt.substring(0, 150).replace(/\n/g, ' ') + (lastSavePrompt.length > 150 ? '…' : '');
+                return `
+                <div class="csm-picker-group-row" data-group-id="${escHtml(g.id)}" style="cursor:pointer">
+                  <div class="csm-picker-radio"></div>
+                  <div class="csm-picker-group-info">
+                    <div class="csm-picker-group-name" title="${escHtml(g.title)}">${escHtml(g.title)}</div>
+                    <div class="csm-picker-group-meta">${saveCount} save${saveCount !== 1 ? 's' : ''} · ${formatRelTime(g.savedAt)}</div>
+                    ${previewText ? `<div class="csm-picker-group-preview">${escHtml(previewText)}</div>` : ''}
+                  </div>
+                </div>`;
+            }).join('');
+
+            modal.innerHTML = `
+              <div class="csm-picker-modal" style="max-height:500px">
+                <div class="csm-picker-header">
+                  <span style="font-size:20px">↗️</span>
+                  <span class="csm-picker-title">Move to Thread</span>
+                  <button class="csm-close" id="csm-move-close">✕</button>
+                </div>
+                <div class="csm-picker-subtitle">Select a thread or create a new one to move this save into.</div>
+                <div class="csm-picker-list">${newThreadRow}${groupRows}</div>
+                <div class="csm-picker-actions">
+                  <button class="csm-btn csm-btn-primary" id="csm-move-confirm" style="display:none">Move to New Thread</button>
+                </div>
+              </div>`;
+
+            document.body.appendChild(modal);
+
+            const okBtn = modal.querySelector('#csm-move-confirm');
+            const inputElement = modal.querySelector('.csm-picker-new-input');
+            const newRowWrapper = modal.querySelector('.csm-picker-new-thread');
+            let isNewSelected = false;
+
+            modal.querySelector('#csm-move-close').addEventListener('click', () => { modal.remove(); resolve(null); });
+            modal.addEventListener('click', (e) => { if (e.target === modal) { modal.remove(); resolve(null); } });
+
+            // Handle New Thread selection
+            newRowWrapper.addEventListener('click', () => {
+                isNewSelected = true;
+                modal.querySelectorAll('.csm-picker-group-row').forEach(r => r.classList.remove('csm-picker-selected'));
+                newRowWrapper.classList.add('csm-picker-selected');
+                okBtn.style.display = 'block';
+                inputElement.focus();
+            });
+
+            // Handle Existing Group selection
+            modal.querySelectorAll('.csm-picker-group-row').forEach(row => {
+                row.addEventListener('click', () => {
+                    modal.remove();
+                    resolve({ isNew: false, groupId: row.dataset.groupId });
+                });
+                row.addEventListener('mouseenter', () => {
+                    if (!isNewSelected) row.classList.add('csm-picker-selected');
+                });
+                row.addEventListener('mouseleave', () => {
+                    if (!isNewSelected) row.classList.remove('csm-picker-selected');
+                });
+            });
+
+            // Handle Confirm (New Thread)
+            okBtn.addEventListener('click', () => {
+                const title = inputElement.value.trim() || 'Untitled Thread';
+                modal.remove();
+                resolve({ isNew: true, title });
+            });
+        });
+    }
+
     // ─── Actions ──────────────────────────────────────────────────────────────
 
-    // writeBridge=true only when called as part of an explicit account handoff (Switch+Save)
-    async function handleSaveContext(silent = false, writeBridge = false) {
+    async function handleSaveContext() {
         const { conversation, prompt, cancelled } = await promptWithManualEditorIfNeeded();
         if (cancelled) return null;
 
-        handoffPromptText = prompt;
-        const activeAccount = accounts.find(a => a.id === activeAccountId);
-        const accountLabel = activeAccount?.label || 'Unknown account';
-        await chrome.runtime.sendMessage({ type: 'SAVE_CONTEXT', conversation, prompt, accountLabel });
-        // Always track the last saved conversation so switch can write the bridge
-        if (conversation?.threadId) lastSavedConversation = conversation;
-        if (writeBridge && conversation?.threadId) {
-            await saveHandoffBridge(conversation.threadId, conversation.originalTitle, conversation.chatId);
-        }
-        if (!silent) showToast('\u2705 Context saved!');
+        // Close widget panel before showing overlay
+        widgetOpen = false;
+        document.getElementById('csm-panel')?.classList.add('csm-hidden');
+
+        await showGroupPickerOverlay('save', { conversation, prompt });
         return { prompt, conversation };
+    }
+
+    async function handleViewContexts() {
+        widgetOpen = false;
+        document.getElementById('csm-panel')?.classList.add('csm-hidden');
+        await showGroupPickerOverlay('browse');
     }
 
     async function handleCopyHandoff() {
@@ -729,17 +1093,6 @@
         if (lastSwitchTime && (now - lastSwitchTime) < throttleMs) {
             const proceed = await showThrottleWarning();
             if (!proceed) return;
-        }
-
-        // Bridge + optional save
-        if (lastSavedConversation?.threadId) {
-            // User already saved manually this session — just write the bridge, no duplicate save
-            await saveHandoffBridge(lastSavedConversation.threadId, lastSavedConversation.originalTitle, lastSavedConversation.chatId);
-        } else if (autoSaveContext) {
-            // Only auto-save when user explicitly clicks "Switch + Save Context" (autoSaveContext=true)
-            // Plain "Switch" never auto-saves — user must click Save Context manually first
-            const saveRes = await handleSaveContext(true, true);
-            if (saveRes === null) return; // User cancelled manual editor
         }
 
         lastSwitchTime = now;

@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Claude Session Manager</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
+
 <body>
 
   <!-- ── Screen: Lock ───────────────────────────────────── -->
@@ -19,7 +21,8 @@
     <div id="lock-error" class="error-msg hidden"></div>
     <button class="btn btn-primary btn-full" id="btn-unlock">Unlock</button>
     <p class="hint" id="hint-first-launch" style="display:none">
-      This is your first launch. Choose a master password — it encrypts all your credentials locally. <strong>There is no recovery if you forget it.</strong>
+      This is your first launch. Choose a master password — it encrypts all your credentials locally. <strong>There is
+        no recovery if you forget it.</strong>
     </p>
   </div>
 
@@ -128,14 +131,21 @@
 
       <div class="setting-row">
         <div class="setting-info">
-          <div class="setting-name">Context mode</div>
-          <div class="setting-desc">How the handoff prompt is built</div>
+          <div class="setting-name">Copy session format</div>
+          <div class="setting-desc">Format used when copying a saved session</div>
         </div>
         <select class="setting-select" id="set-context-mode">
-          <option value="structured">Structured (default)</option>
-          <option value="full">Full transcript</option>
+          <option value="full">Full transcript (default)</option>
+          <option value="structured">Structured (summarised)</option>
           <option value="manual">Manual</option>
         </select>
+      </div>
+
+      <div class="setting-row" style="margin-bottom:8px">
+        <label style="display:flex;align-items:center;cursor:pointer;gap:8px;font-size:13px;color:var(--text2)">
+          <input type="checkbox" id="set-disable-lock" />
+          <span>Disable auto-lock entirely</span>
+        </label>
       </div>
 
       <div class="setting-row">
@@ -161,4 +171,5 @@
 
   <script src="popup.js"></script>
 </body>
+
 </html>

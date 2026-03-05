@@ -201,6 +201,7 @@ async function loadContextSettings() {
                   <div style="font-size:11px;color:var(--text3);margin-top:2px">${(group.saves || []).length} session${(group.saves || []).length !== 1 ? 's' : ''} · last saved ${formatDate(group.savedAt)}</div>
                 </div>
                 <div style="display:flex;gap:6px;flex-shrink:0">
+                  <button class="table-btn ctx-rename-group-btn" data-group-id="${esc(group.id)}" data-group-title="${esc(group.title)}">✏️ Rename</button>
                   <button class="btn btn-primary ctx-copy-all-btn" style="padding:6px 12px;font-size:12px" data-group-id="${esc(group.id)}">📋 Copy All</button>
                   <button class="table-btn table-btn-danger ctx-del-group-btn" data-group-id="${esc(group.id)}">🗑️ Delete</button>
                 </div>
@@ -228,6 +229,17 @@ async function loadContextSettings() {
                 ok.textContent = '✅ Consolidated prompt copied!';
                 ok.classList.remove('hidden');
                 setTimeout(() => ok.classList.add('hidden'), 2500);
+            });
+        });
+
+        listEl.querySelectorAll('.ctx-rename-group-btn').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const currentTitle = btn.dataset.groupTitle;
+                const newTitle = prompt('Enter a new name for this thread:', currentTitle);
+                if (newTitle && newTitle.trim() !== currentTitle) {
+                    await msg({ type: 'RENAME_CONTEXT_GROUP', groupId: btn.dataset.groupId, newTitle: newTitle.trim() });
+                    loadContextSettings();
+                }
             });
         });
 
@@ -274,7 +286,7 @@ async function loadContextSettings() {
     // ── Settings ─────────────────────────────────────────
     const { settings } = await msg({ type: 'GET_SETTINGS' });
     if (!settings) return;
-    document.getElementById('ctx-mode').value = settings.contextMode || 'structured';
+    document.getElementById('ctx-mode').value = settings.contextMode || 'full';
     document.getElementById('ctx-last-n').value = settings.lastNMessages || 6;
     document.getElementById('ctx-template').value = settings.handoffTemplate || '';
 }
@@ -404,7 +416,19 @@ document.getElementById('btn-reset-selectors').addEventListener('click', () => {
 
 async function loadSecuritySettings() {
     const { settings } = await msg({ type: 'GET_SETTINGS' });
+    const disableCheckbox = document.getElementById('sec-disable-lock');
+    const timeoutWrap = document.getElementById('wrap-lock-timeout');
+
+    disableCheckbox.checked = !!settings.disableAutoLock;
     document.getElementById('sec-lock-timeout').value = settings.autoLockMinutes || 30;
+
+    // Toggle timeout visibility based on checkbox state
+    disableCheckbox.addEventListener('change', () => {
+        timeoutWrap.style.opacity = disableCheckbox.checked ? '0.5' : '1';
+        timeoutWrap.style.pointerEvents = disableCheckbox.checked ? 'none' : 'auto';
+    });
+    // Trigger initial state
+    disableCheckbox.dispatchEvent(new Event('change'));
 }
 
 document.getElementById('btn-change-pw').addEventListener('click', async () => {
@@ -432,7 +456,17 @@ document.getElementById('btn-change-pw').addEventListener('click', async () => {
 
 document.getElementById('btn-save-lock').addEventListener('click', async () => {
     const { settings: current } = await msg({ type: 'GET_SETTINGS' });
-    await msg({ type: 'SAVE_SETTINGS', settings: { ...current, autoLockMinutes: parseInt(document.getElementById('sec-lock-timeout').value) || 30 } });
+    const isDisabled = document.getElementById('sec-disable-lock').checked;
+    const minutes = parseInt(document.getElementById('sec-lock-timeout').value) || 30;
+
+    await msg({
+        type: 'SAVE_SETTINGS',
+        settings: { ...current, disableAutoLock: isDisabled, autoLockMinutes: minutes }
+    });
+
+    // Tell background script to refresh the timer immediately
+    await msg({ type: 'RESET_AUTOLOCK' });
+
     showMsg('lock-saved', 'success');
 });
 

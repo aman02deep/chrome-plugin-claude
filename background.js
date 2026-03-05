@@ -12,6 +12,43 @@
 let _cryptoKey = null;       // AES-GCM CryptoKey — derived from master password on unlock
 let _isLocked = true;
 
+// ─── Session storage persistence (survives service worker restart) ───────────
+async function persistKeyToSession(key) {
+    try {
+        const exported = await crypto.subtle.exportKey('raw', key);
+        const b64 = bufToB64(exported);
+        await chrome.storage.session.set({ persistedKey: b64 });
+    } catch (e) {
+        console.warn('[CSM] Failed to persist key to session:', e);
+    }
+}
+
+async function restoreKeyFromSession() {
+    try {
+        const { persistedKey } = await chrome.storage.session.get(['persistedKey']);
+        if (persistedKey) {
+            const raw = b64ToBuf(persistedKey);
+            _cryptoKey = await crypto.subtle.importKey(
+                'raw', raw,
+                { name: 'AES-GCM', length: 256 },
+                true, ['encrypt', 'decrypt']
+            );
+            _isLocked = false;
+            console.log('[CSM] Key restored from session storage. Extension is unlocked.');
+        }
+    } catch (e) {
+        console.warn('[CSM] Failed to restore key from session:', e);
+    }
+}
+
+async function clearKeyFromSession() {
+    await chrome.storage.session.remove(['persistedKey']);
+}
+
+// Attempt to restore key immediately on service worker startup
+// We store the promise so message handlers can await it before responding
+const _restorePromise = restoreKeyFromSession();
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CLAUDE_URL = 'https://claude.ai';
 const COOKIE_DOMAIN = 'claude.ai';
@@ -43,7 +80,7 @@ async function deriveKeyFromPassword(password) {
         { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
         keyMaterial,
         { name: 'AES-GCM', length: 256 },
-        false,
+        true, // Must be true so we can export it to chrome.storage.session
         ['encrypt', 'decrypt']
     );
 }
@@ -128,17 +165,31 @@ async function broadcastToClaudeTabs(message) {
     chrome.runtime.sendMessage(message).catch(() => { });
 }
 
-// ─── Auto-lock ────────────────────────────────────────────────────────────────
+// ─── Auto-lock timer ──────────────────────────────────────────────────────────
 
-async function scheduleAutoLock() {
-    const settings = await getSettings();
-    const minutes = settings.autoLockMinutes || 30;
-    await chrome.alarms.clear(ALARM_AUTOLOCK);
-    chrome.alarms.create(ALARM_AUTOLOCK, { delayInMinutes: minutes });
+async function resetAutoLockTimer() {
+    if (_isLocked || !_cryptoKey) return;
+    const { settings } = await storageGet(['settings']);
+
+    // Clear existing alarm first
+    chrome.alarms.clear(ALARM_AUTOLOCK);
+
+    if (settings?.disableAutoLock) {
+        await persistKeyToSession(_cryptoKey);
+        return; // Don't set a new alarm
+    } else {
+        await clearKeyFromSession();
+    }
+
+    const lockMinutes = settings?.autoLockMinutes || 30;
+    chrome.alarms.create(ALARM_AUTOLOCK, { delayInMinutes: lockMinutes });
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === ALARM_AUTOLOCK) {
+        const { settings } = await storageGet(['settings']);
+        if (settings?.disableAutoLock) return; // double check
+
         _cryptoKey = null;
         _isLocked = true;
         // Notify all open Claude tabs + popup
@@ -330,7 +381,7 @@ async function switchAccount(fromId, toId) {
     });
 
     // Reset auto-lock timer
-    await scheduleAutoLock();
+    await resetAutoLockTimer();
 
     return { success: true };
 }
@@ -367,9 +418,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 // ─── Message router ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    handleMessage(message, sender).then(sendResponse).catch((err) => {
-        sendResponse({ error: err.message });
-    });
+    // Await the key restoration promise before handling any messages 
+    // to prevent race conditions where IS_LOCKED is checked before the key is imported.
+    _restorePromise.then(() => handleMessage(message, sender))
+        .then(sendResponse)
+        .catch((err) => {
+            sendResponse({ error: err.message });
+        });
     return true; // keep channel open for async response
 });
 
@@ -386,7 +441,14 @@ async function handleMessage(message, sender) {
                 await storageSet({ masterPasswordHash: hash });
                 _cryptoKey = await deriveKeyFromPassword(password);
                 _isLocked = false;
-                await scheduleAutoLock();
+
+                const { settings } = await storageGet(['settings']);
+                if (settings?.disableAutoLock) {
+                    await persistKeyToSession(_cryptoKey);
+                } else {
+                    await resetAutoLockTimer();
+                }
+
                 // Notify all open Claude tabs to refresh their widget state
                 broadcastToClaudeTabs({ type: 'UNLOCKED' });
                 return { success: true, firstLaunch: true };
@@ -399,7 +461,14 @@ async function handleMessage(message, sender) {
 
             _cryptoKey = await deriveKeyFromPassword(password);
             _isLocked = false;
-            await scheduleAutoLock();
+
+            const { settings } = await storageGet(['settings']);
+            if (settings?.disableAutoLock) {
+                await persistKeyToSession(_cryptoKey);
+            } else {
+                await resetAutoLockTimer();
+            }
+
             // Notify all open Claude tabs to refresh their widget state
             broadcastToClaudeTabs({ type: 'UNLOCKED' });
             return { success: true };
@@ -408,6 +477,7 @@ async function handleMessage(message, sender) {
         case 'LOCK': {
             _cryptoKey = null;
             _isLocked = true;
+            await clearKeyFromSession();
             await chrome.alarms.clear(ALARM_AUTOLOCK);
             return { success: true };
         }
@@ -489,9 +559,10 @@ async function handleMessage(message, sender) {
         }
 
         case 'SAVE_CONTEXT': {
-            const { conversation, prompt, accountLabel } = message;
+            const { conversation, prompt, accountLabel, explicitThreadId } = message;
             const chatId = conversation?.chatId || null;
-            const threadId = conversation?.threadId || chatId || null;
+            // explicitThreadId: set by the group picker UI — always trust it over heuristics
+            const threadId = explicitThreadId || conversation?.threadId || chatId || null;
             const title = conversation?.originalTitle || conversation?.title || 'Untitled';
 
             const subEntry = {
@@ -499,6 +570,7 @@ async function handleMessage(message, sender) {
                 accountLabel: accountLabel || 'Unknown account',
                 chatId,
                 prompt,
+                conversation, // store the full conversation array
                 savedAt: new Date().toISOString(),
             };
 
@@ -515,16 +587,46 @@ async function handleMessage(message, sender) {
                 return h;
             });
 
-            // Find existing group by threadId or create new one
+            // Match by threadId — when explicitThreadId is set this is a guaranteed exact match
             const groupIdx = threadId ? history.findIndex(h => h.threadId === threadId) : -1;
             if (groupIdx !== -1) {
-                // Append sub-entry to existing group and move to top
                 const group = history.splice(groupIdx, 1)[0];
+
+                // --- Update/Duplicate Prevention ---
+                // Rule 1: If the incoming save has a real chatId, AND the entire group consists
+                //   of old-format saves (all null chatId), wipe them — they're stale legacy data
+                //   and this properly-tracked save supersedes them all.
+                // Rule 2: If the group already has some chatId-stamped saves, preserve them as
+                //   legitimate historical records from different account sessions.
+                if (subEntry.chatId) {
+                    const allLegacy = group.saves.every(s => !s.chatId);
+                    if (allLegacy) {
+                        group.saves = []; // whole group was old-format; start fresh
+                    }
+                }
+
+                // Find if this exact Claude chat session was already saved
+                const existingIndex = subEntry.chatId
+                    ? group.saves.findIndex(s => s.chatId === subEntry.chatId)
+                    : -1;
+
+                if (existingIndex !== -1) {
+                    // Same chatId — overwrite; the conversation grew, not a new session
+                    const existing = group.saves.splice(existingIndex, 1)[0];
+                    existing.savedAt = subEntry.savedAt;
+                    existing.prompt = subEntry.prompt;
+                    existing.conversation = subEntry.conversation;
+                    existing.chatId = subEntry.chatId;
+                    group.saves.push(existing);
+                } else {
+                    // Genuinely new: first save, new account session, or no chatId → append
+                    group.saves.push(subEntry);
+                }
+
                 group.savedAt = subEntry.savedAt;
-                group.saves.push(subEntry);
                 history.unshift(group);
             } else {
-                // New group
+                // New group — use the threadId chosen by the picker (or generate one)
                 history.unshift({
                     id: crypto.randomUUID(),
                     threadId: threadId || subEntry.id,
@@ -578,6 +680,56 @@ async function handleMessage(message, sender) {
             return { success: true };
         }
 
+        case 'RENAME_CONTEXT_GROUP': {
+            const { groupId, newTitle } = message;
+            const { contextHistory } = await storageGet(['contextHistory']);
+            let history = contextHistory || [];
+
+            const group = history.find(g => g.id === groupId);
+            if (!group) return { error: 'Group not found' };
+
+            group.title = newTitle;
+            await storageSet({ contextHistory: history });
+            return { success: true };
+        }
+
+        case 'MOVE_CONTEXT_SAVE': {
+            // Move a sub-entry from one group to another (or a brand new group)
+            const { saveId, targetGroupId, newThreadId, newThreadTitle } = message;
+            const { contextHistory } = await storageGet(['contextHistory']);
+            let history = contextHistory || [];
+
+            // Find and extract the sub-entry
+            let movedSave = null;
+            history = history.map(g => {
+                const save = g.saves?.find(s => s.id === saveId);
+                if (save) movedSave = save;
+                return { ...g, saves: (g.saves || []).filter(s => s.id !== saveId) };
+            }).filter(g => g.saves.length > 0); // drop empty groups
+
+            if (!movedSave) return { error: 'Save entry not found' };
+
+            if (newThreadId) {
+                // Create a new group for it
+                history.unshift({
+                    id: crypto.randomUUID(),
+                    threadId: newThreadId,
+                    title: newThreadTitle || 'Untitled Thread',
+                    savedAt: new Date().toISOString(),
+                    saves: [{ ...movedSave, savedAt: new Date().toISOString() }],
+                });
+            } else {
+                // Append to existing target group
+                const targetIdx = history.findIndex(g => g.id === targetGroupId);
+                if (targetIdx === -1) return { error: 'Target group not found' };
+                history[targetIdx].saves.push({ ...movedSave, savedAt: new Date().toISOString() });
+                history[targetIdx].savedAt = new Date().toISOString();
+            }
+
+            await storageSet({ contextHistory: history });
+            return { success: true };
+        }
+
         case 'CLEAR_CONTEXT_HISTORY': {
             await storageSet({ contextHistory: [], pendingHandoff: null });
             return { success: true };
@@ -609,10 +761,23 @@ async function handleMessage(message, sender) {
 
         case 'SAVE_SETTINGS': {
             await storageSet({ settings: message.settings });
-            // Reschedule auto-lock if timeout changed
-            if (message.settings.autoLockMinutes && !_isLocked) {
-                await scheduleAutoLock();
+
+            // If unlocked, update persistence and alarms immediately based on new settings
+            if (!_isLocked && _cryptoKey) {
+                if (message.settings.disableAutoLock) {
+                    await chrome.alarms.clear(ALARM_AUTOLOCK);
+                    await persistKeyToSession(_cryptoKey);
+                } else {
+                    await clearKeyFromSession();
+                    // Just calling resetAutoLockTimer will schedule the new alarm
+                    await resetAutoLockTimer();
+                }
             }
+            return { success: true };
+        }
+
+        case 'RESET_AUTOLOCK': {
+            await resetAutoLockTimer();
             return { success: true };
         }
 

@@ -49,7 +49,7 @@ async function clear() {
 export const DEFAULT_SETTINGS = {
     autoDetectLimit: true,
     contextSummaryLength: 'medium',   // 'short' | 'medium' | 'long'
-    contextMode: 'structured',        // 'full' | 'structured' | 'manual'
+    contextMode: 'full',               // 'full' | 'structured' | 'manual'
     autoSaveContext: true,
     switchThrottleMinutes: 10,
     autoLockMinutes: 30,

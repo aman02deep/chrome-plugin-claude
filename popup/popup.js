@@ -254,8 +254,20 @@ async function loadSettings() {
     const { settings } = await msg({ type: 'GET_SETTINGS' });
     document.getElementById('set-auto-detect').checked = settings.autoDetectLimit !== false;
     document.getElementById('set-auto-save').checked = settings.autoSaveContext !== false;
-    document.getElementById('set-context-mode').value = settings.contextMode || 'structured';
-    document.getElementById('set-lock-timeout').value = settings.autoLockMinutes || 30;
+    document.getElementById('set-context-mode').value = settings.contextMode || 'full';
+
+    const disableCheckbox = document.getElementById('set-disable-lock');
+    const timeoutInput = document.getElementById('set-lock-timeout');
+
+    disableCheckbox.checked = !!settings.disableAutoLock;
+    timeoutInput.value = settings.autoLockMinutes || 30;
+
+    disableCheckbox.addEventListener('change', () => {
+        timeoutInput.parentElement.style.opacity = disableCheckbox.checked ? '0.5' : '1';
+        timeoutInput.disabled = disableCheckbox.checked;
+    });
+    disableCheckbox.dispatchEvent(new Event('change'));
+
     document.getElementById('set-throttle').value = settings.switchThrottleMinutes || 10;
 }
 
@@ -266,10 +278,12 @@ async function handleSaveSettings() {
         autoDetectLimit: document.getElementById('set-auto-detect').checked,
         autoSaveContext: document.getElementById('set-auto-save').checked,
         contextMode: document.getElementById('set-context-mode').value,
+        disableAutoLock: document.getElementById('set-disable-lock').checked,
         autoLockMinutes: parseInt(document.getElementById('set-lock-timeout').value) || 30,
         switchThrottleMinutes: parseInt(document.getElementById('set-throttle').value) || 10,
     };
     await msg({ type: 'SAVE_SETTINGS', settings: updated });
+    await msg({ type: 'RESET_AUTOLOCK' }); // Force timer refresh
     showScreen('dashboard');
     loadDashboard();
 }
